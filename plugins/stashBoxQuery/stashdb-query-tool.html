@@ -1,0 +1,1073 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>StashDB Query Tool</title>
+<style>
+  :root {
+    --bg: #f4f5f7; --panel: #ffffff; --border: #d9dce1; --text: #1c1e21;
+    --muted: #6b7280; --accent: #4f46e5; --accent-hover: #4338ca;
+    --error-bg: #fdecea; --error-text: #92140c; --code-bg: #0f172a; --code-text: #e2e8f0;
+    --input-bg: #ffffff; --hover-bg: #f0f0f2; --chip-bg: #eef0ff;
+    --placeholder-bg: #e5e7eb; --th-bg: #f0f1f4; --row-hover-bg: #f8f9fb;
+    --shadow: rgba(0,0,0,.1); --dropdown-bg: #ffffff;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16181d; --panel: #1e2128; --border: #333844; --text: #e6e8ec;
+      --muted: #9aa1ac; --accent: #7c7ff0; --accent-hover: #8f92ff;
+      --error-bg: #3a1414; --error-text: #ff8a80; --code-bg: #0b0d12; --code-text: #d8dde5;
+      --input-bg: #262a33; --hover-bg: #2a2e37; --chip-bg: #2b2c58;
+      --placeholder-bg: #2a2e37; --th-bg: #22252c; --row-hover-bg: #22252c;
+      --shadow: rgba(0,0,0,.4); --dropdown-bg: #262a33;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #16181d; --panel: #1e2128; --border: #333844; --text: #e6e8ec;
+    --muted: #9aa1ac; --accent: #7c7ff0; --accent-hover: #8f92ff;
+    --error-bg: #3a1414; --error-text: #ff8a80; --code-bg: #0b0d12; --code-text: #d8dde5;
+    --input-bg: #262a33; --hover-bg: #2a2e37; --chip-bg: #2b2c58;
+    --placeholder-bg: #2a2e37; --th-bg: #22252c; --row-hover-bg: #22252c;
+    --shadow: rgba(0,0,0,.4); --dropdown-bg: #262a33;
+  }
+  :root[data-theme="light"] {
+    --bg: #f4f5f7; --panel: #ffffff; --border: #d9dce1; --text: #1c1e21;
+    --muted: #6b7280; --accent: #4f46e5; --accent-hover: #4338ca;
+    --error-bg: #fdecea; --error-text: #92140c; --code-bg: #0f172a; --code-text: #e2e8f0;
+    --input-bg: #ffffff; --hover-bg: #f0f0f2; --chip-bg: #eef0ff;
+    --placeholder-bg: #e5e7eb; --th-bg: #f0f1f4; --row-hover-bg: #f8f9fb;
+    --shadow: rgba(0,0,0,.1); --dropdown-bg: #ffffff;
+  }
+  * { box-sizing: border-box; }
+  body { transition: background .15s ease, color .15s ease; }
+  body {
+    margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg); color: var(--text); font-size: 14px;
+  }
+  header { background: var(--panel); border-bottom: 1px solid var(--border); padding: 14px 20px; }
+  h1 { font-size: 18px; margin: 0 0 10px 0; display: flex; align-items: center; gap: 10px; }
+  .conn-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  .conn-row input { flex: 1; min-width: 200px; }
+  .conn-row select#stashBoxSelect { flex: 1; min-width: 220px; max-width: 320px; }
+  input, select, textarea, button {
+    font-family: inherit; font-size: 13px; padding: 6px 8px;
+    border: 1px solid var(--border); border-radius: 6px; background: var(--input-bg); color: var(--text);
+    height: fit-content;
+  }
+  button {
+    background: var(--accent); color: #fff; border: none; cursor: pointer; padding: 7px 14px; font-weight: 600;
+  }
+  button:hover { background: var(--accent-hover); }
+  button.secondary { background: var(--input-bg); color: var(--text); border: 1px solid var(--border); }
+  button.secondary:hover { background: var(--hover-bg); }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  main { max-width: 1200px; margin: 20px auto; padding: 0 20px; }
+  .tabs { display: flex; gap: 4px; margin-bottom: 14px; flex-wrap: wrap; }
+  .tab-btn {
+    background: var(--input-bg); color: var(--muted); border: 1px solid var(--border); font-weight: 600;
+  }
+  .tab-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin-bottom: 16px; display: none; }
+  .panel.active { display: block; }
+  .field-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 12px; }
+  .field { display: flex; flex-direction: column; gap: 4px; }
+  .field label { font-weight: 600; font-size: 12px; color: var(--muted); }
+  .field .hint { font-weight: 400; font-size: 11px; color: var(--muted); }
+  .crit { display: flex; gap: 6px; }
+  .crit input { flex: 2; min-width: 0; }
+  .crit select { flex: 1; min-width: 0; }
+  .picker { position: relative; flex: 2; min-width: 0; }
+  .picker-input { width: 100%; }
+  .picker-dropdown {
+    position: absolute; top: 100%; left: 0; right: 0; margin-top: 2px; background: var(--dropdown-bg);
+    border: 1px solid var(--border); border-radius: 6px; box-shadow: 0 4px 12px var(--shadow);
+    z-index: 30; max-height: 180px; overflow-y: auto; display: none;
+  }
+  .picker-item { padding: 6px 8px; cursor: pointer; font-size: 12px; }
+  .picker-item:hover { background: var(--hover-bg); }
+  .picker-item.picker-empty { color: var(--muted); cursor: default; }
+  .picker-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+  .chip {
+    background: var(--chip-bg); color: var(--accent); border-radius: 999px; padding: 2px 4px 2px 10px;
+    font-size: 11px; display: inline-flex; align-items: center; gap: 2px;
+  }
+  .chip-remove { background: none; border: none; color: var(--accent); cursor: pointer; font-size: 13px; padding: 0 4px; line-height: 1; }
+  .thumb { width: 64px; height: 42px; object-fit: cover; border-radius: 4px; display: block; background: var(--placeholder-bg); }
+  .thumb-placeholder { width: 64px; height: 42px; border-radius: 4px; background: var(--placeholder-bg); }
+  .section-title { font-size: 13px; font-weight: 700; margin: 18px 0 8px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+  .toolbar { display: flex; gap: 10px; align-items: center; margin-top: 16px; flex-wrap: wrap; }
+  .spacer { flex: 1; }
+  #status { font-size: 12px; color: var(--muted); }
+  #results { margin-top: 10px; }
+  .result-header { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+  .count-badge { font-weight: 700; }
+  .view-toggle-btn.active-view { background: var(--accent); color: #fff; border-color: var(--accent); }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { background: var(--th-bg); position: sticky; top: 0; }
+  tr:hover td { background: var(--row-hover-bg); }
+  .id-cell { font-family: monospace; font-size: 11px; color: var(--muted); cursor: pointer; }
+  .view-link {
+    color: var(--accent); font-weight: 600; text-decoration: none; white-space: nowrap;
+    display: inline-flex; align-items: center; gap: 4px; padding: 3px 9px;
+    border: 1px solid var(--border); border-radius: 999px; background: var(--hover-bg);
+  }
+  .view-link:visited { color: var(--accent); }
+  .view-link:hover { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .view-link-plain { color: inherit; text-decoration: none; }
+  .view-link-plain:visited { color: inherit; }
+  .view-link-plain:hover { text-decoration: underline; color: var(--accent); }
+  .card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; margin-top: 4px; }
+  .card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    display: flex; flex-direction: column; transition: box-shadow .15s ease, transform .15s ease;
+  }
+  .card:hover { box-shadow: 0 6px 16px var(--shadow); transform: translateY(-2px); }
+  .card-thumb { width: 100%; aspect-ratio: 16 / 10; object-fit: cover; display: block; background: var(--placeholder-bg); border-radius: 10px 10px 0 0; }
+  .card-thumb-placeholder { width: 100%; aspect-ratio: 16 / 10; background: var(--placeholder-bg); border-radius: 10px 10px 0 0; }
+  .card-body { padding: 10px 12px; display: flex; flex-direction: column; gap: 5px; flex: 1; }
+  .card-title { font-weight: 700; font-size: 13px; line-height: 1.3; }
+  .card-meta { font-size: 11px; color: var(--muted); }
+  .card-line { font-size: 11px; color: var(--muted); display: flex; gap: 4px; min-width: 0; }
+  .card-line strong { color: var(--text); font-weight: 600; flex-shrink: 0; }
+  .card-footer { margin-top: auto; padding-top: 8px; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .truncate-wrap { position: relative; display: inline-block; min-width: 0; max-width: 100%; }
+  .truncate { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+  .tooltip {
+    display: none; position: absolute; bottom: 100%; left: 0; margin-bottom: 6px;
+    background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 6px;
+    padding: 6px 9px; font-size: 12px; white-space: normal; width: max-content; max-width: 260px;
+    box-shadow: 0 4px 14px var(--shadow); z-index: 50;
+  }
+  .truncate-wrap:hover .tooltip { display: block; }
+  .error-box { background: var(--error-bg); color: var(--error-text); padding: 10px 12px; border-radius: 8px; white-space: pre-wrap; font-family: monospace; font-size: 12px; }
+  pre.json { background: var(--code-bg); color: var(--code-text); padding: 12px; border-radius: 8px; overflow: auto; max-height: 500px; font-size: 12px; }
+  details summary { cursor: pointer; font-weight: 600; color: var(--muted); margin: 8px 0; }
+  textarea.code { width: 100%; font-family: monospace; font-size: 12px; min-height: 140px; }
+  .pill { display: inline-block; background: var(--chip-bg); color: var(--accent); border-radius: 999px; padding: 1px 8px; font-size: 11px; }
+  .note { font-size: 12px; color: var(--muted); }
+  #themeToggleBtn { font-size: 16px; line-height: 1; padding: 6px 10px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>StashDB Query Tool <button id="themeToggleBtn" class="secondary" type="button" title="Toggle dark/light theme">&#127769;</button></h1>
+  <div class="conn-row">
+    <select id="stashBoxSelect"><option value="">Manual / Custom</option></select>
+    <input id="instanceUrl" placeholder="Instance GraphQL URL" value="https://stashdb.org/graphql">
+    <input id="apiKey" type="password" placeholder="API Key">
+    <button id="showKeyBtn" class="secondary" type="button">Show</button>
+    <button id="saveConnBtn" type="button">Save</button>
+    <span id="connStatus" class="note"></span>
+  </div>
+</header>
+
+<main>
+  <div class="tabs">
+    <button class="tab-btn active" data-tab="scenes">Scenes</button>
+    <button class="tab-btn" data-tab="performers">Performers</button>
+    <button class="tab-btn" data-tab="studios">Studios</button>
+    <button class="tab-btn" data-tab="tags">Tags</button>
+    <button class="tab-btn" data-tab="custom">Custom Query</button>
+  </div>
+
+  <!-- SCENES -->
+  <div class="panel active" id="panel-scenes">
+    <div class="field-grid">
+      <div class="field"><label>Title</label><input id="s-title" placeholder="like query unless quoted"></div>
+      <div class="field"><label>URL contains</label><input id="s-url"></div>
+      <div class="field"><label>Parent studio name</label><input id="s-parentStudio"></div>
+      <div class="field"><label>Alias (performer appears as)</label>
+        <div class="crit"><input id="s-alias-v"><select id="s-alias-m"><option value="">-- unused --</option></select></div>
+      </div>
+      <div class="field"><label>Code</label>
+        <div class="crit"><input id="s-code-v"><select id="s-code-m"><option value="">-- unused --</option></select></div>
+      </div>
+      <div class="field"><label>Date (YYYY-MM-DD)</label>
+        <div class="crit"><input id="s-date-v" type="date"><select id="s-date-m"><option value="">-- unused --</option></select></div>
+      </div>
+      <div class="field"><label>Production date</label>
+        <div class="crit"><input id="s-proddate-v" type="date"><select id="s-proddate-m"><option value="">-- unused --</option></select></div>
+      </div>
+      <div class="field"><label>Studios <span class="hint">search by name, pick multiple</span></label>
+        <div class="crit">
+          <div class="picker" id="s-studios-picker" data-entity="studios">
+            <input type="text" class="picker-input" placeholder="search studios...">
+            <div class="picker-dropdown"></div>
+            <div class="picker-chips"></div>
+          </div>
+          <select id="s-studios-m"><option value="">-- unused --</option></select>
+        </div>
+      </div>
+      <div class="field"><label>Tags <span class="hint">INCLUDES_ALL = has all picked</span></label>
+        <div class="crit">
+          <div class="picker" id="s-tags-picker" data-entity="tags">
+            <input type="text" class="picker-input" placeholder="search tags...">
+            <div class="picker-dropdown"></div>
+            <div class="picker-chips"></div>
+          </div>
+          <select id="s-tags-m"><option value="">-- unused --</option></select>
+        </div>
+      </div>
+      <div class="field"><label>Performers <span class="hint">search by name, pick multiple</span></label>
+        <div class="crit">
+          <div class="picker" id="s-performers-picker" data-entity="performers">
+            <input type="text" class="picker-input" placeholder="search performers...">
+            <div class="picker-dropdown"></div>
+            <div class="picker-chips"></div>
+          </div>
+          <select id="s-performers-m"><option value="">-- unused --</option></select>
+        </div>
+      </div>
+      <div class="field"><label>Fingerprints <span class="hint">(comma separated hashes)</span></label>
+        <div class="crit"><input id="s-fingerprints-v" placeholder="hash1,hash2"><select id="s-fingerprints-m"><option value="">-- unused --</option></select></div>
+      </div>
+      <div class="field"><label>Favorites</label>
+        <select id="s-favorites"><option value="">-- any --</option><option>PERFORMER</option><option>STUDIO</option><option>ALL</option></select>
+      </div>
+      <div class="field"><label>Has fingerprint submissions</label>
+        <select id="s-hasfp"><option value="">-- any --</option><option value="true">true</option><option value="false">false</option></select>
+      </div>
+    </div>
+    <div class="section-title">Sort &amp; Pagination</div>
+    <div class="field-grid">
+      <div class="field"><label>Sort</label>
+        <select id="s-sort"><option>DATE</option><option>TITLE</option><option>DURATION</option><option>TRENDING</option><option>POPULARITY</option><option>CREATED_AT</option><option>UPDATED_AT</option></select>
+      </div>
+      <div class="field"><label>Direction</label><select id="s-dir"><option>DESC</option><option>ASC</option></select></div>
+      <div class="field"><label>Page</label><input id="s-page" type="number" value="1" min="1"></div>
+      <div class="field"><label>Per page</label><input id="s-perpage" type="number" value="25" min="1" max="100"></div>
+    </div>
+    <div class="toolbar">
+      <button data-run="scenes">Run Query</button>
+      <button class="secondary" data-reset="scenes" type="button">Reset filters</button>
+      <div class="spacer"></div>
+      <span id="status"></span>
+    </div>
+  </div>
+
+  <!-- PERFORMERS -->
+  <div class="panel" id="panel-performers">
+    <div class="field-grid">
+      <div class="field"><label>Names (name + disambiguation)</label><input id="p-names"></div>
+      <div class="field"><label>Name only</label><input id="p-name"></div>
+      <div class="field"><label>Alias</label><input id="p-alias"></div>
+      <div class="field"><label>Disambiguation</label>
+        <div class="crit"><input id="p-disambig-v"><select id="p-disambig-m"><option value="">-- unused --</option></select></div>
+      </div>
+      <div class="field"><label>URL contains</label><input id="p-url"></div>
+      <div class="field"><label>Gender</label>
+        <select id="p-gender"><option value="">-- any --</option><option>UNKNOWN</option><option>MALE</option><option>FEMALE</option><option>TRANSGENDER_MALE</option><option>TRANSGENDER_FEMALE</option><option>INTERSEX</option><option>NON_BINARY</option></select>
+      </div>
+      <div class="field"><label>Ethnicity</label>
+        <select id="p-ethnicity"><option value="">-- any --</option><option>UNKNOWN</option><option>CAUCASIAN</option><option>BLACK</option><option>ASIAN</option><option>INDIAN</option><option>LATIN</option><option>MIDDLE_EASTERN</option><option>MIXED</option><option>OTHER</option></select>
+      </div>
+      <div class="field"><label>Country</label>
+        <div class="crit"><input id="p-country-v" placeholder="2-letter or name"><select id="p-country-m"><option value="">-- unused --</option></select></div>
+      </div>
+      <div class="field"><label>Birthdate</label>
+        <div class="crit"><input id="p-birthdate-v" type="date"><select id="p-birthdate-m"><option value="">-- unused --</option></select></div>
+      </div>
+      <div class="field"><label>Deathdate</label>
+        <div class="crit"><input id="p-deathdate-v" type="date"><select id="p-deathdate-m"><option value="">-- unused --</option></select></div>
+      </div>
+      <div class="field"><label>Birth year</label>
+        <div class="crit"><input id="p-birthyear-v" type="number"><select id="p-birthyear-m"><option value="">-- unused --</option></select></div>
+      </div>
+      <div class="field"><label>Age</label>
+        <div class="crit"><input id="p-age-v" type="number"><select id="p-age-m"><option value="">-- unused --</option></select></div>
+      </div>
+      <div class="field"><label>Eye color</label>
+        <div class="crit">
+          <select id="p-eyecolor-v"><option value="">--</option><option>BLUE</option><option>BROWN</option><option>GREY</option><option>GREEN</option><option>HAZEL</option><option>RED</option></select>
+          <select id="p-eyecolor-m"><option value="">-- unused --</option></select>
+        </div>
+      </div>
+      <div class="field"><label>Hair color</label>
+        <div class="crit">
+          <select id="p-haircolor-v"><option value="">--</option><option>BLONDE</option><option>BRUNETTE</option><option>BLACK</option><option>RED</option><option>AUBURN</option><option>GREY</option><option>BALD</option><option>VARIOUS</option><option>WHITE</option><option>OTHER</option></select>
+          <select id="p-haircolor-m"><option value="">-- unused --</option></select>
+        </div>
+      </div>
+      <div class="field"><label>Height (cm)</label>
+        <div class="crit"><input id="p-height-v" type="number"><select id="p-height-m"><option value="">-- unused --</option></select></div>
+      </div>
+      <div class="field"><label>Cup size</label>
+        <div class="crit"><input id="p-cupsize-v"><select id="p-cupsize-m"><option value="">-- unused --</option></select></div>
+      </div>
+      <div class="field"><label>Band size</label>
+        <div class="crit"><input id="p-bandsize-v" type="number"><select id="p-bandsize-m"><option value="">-- unused --</option></select></div>
+      </div>
+      <div class="field"><label>Waist size</label>
+        <div class="crit"><input id="p-waistsize-v" type="number"><select id="p-waistsize-m"><option value="">-- unused --</option></select></div>
+      </div>
+      <div class="field"><label>Hip size</label>
+        <div class="crit"><input id="p-hipsize-v" type="number"><select id="p-hipsize-m"><option value="">-- unused --</option></select></div>
+      </div>
+      <div class="field"><label>Breast type</label>
+        <div class="crit">
+          <select id="p-breasttype-v"><option value="">--</option><option>NATURAL</option><option>FAKE</option><option>NA</option></select>
+          <select id="p-breasttype-m"><option value="">-- unused --</option></select>
+        </div>
+      </div>
+      <div class="field"><label>Career start year</label>
+        <div class="crit"><input id="p-careerstart-v" type="number"><select id="p-careerstart-m"><option value="">-- unused --</option></select></div>
+      </div>
+      <div class="field"><label>Career end year</label>
+        <div class="crit"><input id="p-careerend-v" type="number"><select id="p-careerend-m"><option value="">-- unused --</option></select></div>
+      </div>
+      <div class="field"><label>Tattoos <span class="hint">location / description</span></label>
+        <div class="crit"><input id="p-tattoos-loc" placeholder="location"><input id="p-tattoos-desc" placeholder="description"><select id="p-tattoos-m"><option value="">-- unused --</option></select></div>
+      </div>
+      <div class="field"><label>Piercings <span class="hint">location / description</span></label>
+        <div class="crit"><input id="p-piercings-loc" placeholder="location"><input id="p-piercings-desc" placeholder="description"><select id="p-piercings-m"><option value="">-- unused --</option></select></div>
+      </div>
+      <div class="field"><label>Is favorite</label>
+        <select id="p-isfav"><option value="">-- any --</option><option value="true">true</option><option value="false">false</option></select>
+      </div>
+      <div class="field"><label>Performed with (performer ID)</label><input id="p-performedwith"></div>
+      <div class="field"><label>Studio ID</label><input id="p-studioid"></div>
+    </div>
+    <div class="section-title">Sort &amp; Pagination</div>
+    <div class="field-grid">
+      <div class="field"><label>Sort</label>
+        <select id="p-sort"><option>CREATED_AT</option><option>NAME</option><option>BIRTHDATE</option><option>DEATHDATE</option><option>SCENE_COUNT</option><option>CAREER_START_YEAR</option><option>DEBUT</option><option>LAST_SCENE</option><option>POPULARITY</option><option>UPDATED_AT</option></select>
+      </div>
+      <div class="field"><label>Direction</label><select id="p-dir"><option>DESC</option><option>ASC</option></select></div>
+      <div class="field"><label>Page</label><input id="p-page" type="number" value="1" min="1"></div>
+      <div class="field"><label>Per page</label><input id="p-perpage" type="number" value="25" min="1" max="100"></div>
+    </div>
+    <div class="toolbar">
+      <button data-run="performers">Run Query</button>
+      <button class="secondary" data-reset="performers" type="button">Reset filters</button>
+      <div class="spacer"></div>
+    </div>
+  </div>
+
+  <!-- STUDIOS -->
+  <div class="panel" id="panel-studios">
+    <div class="field-grid">
+      <div class="field"><label>Name</label><input id="st-name"></div>
+      <div class="field"><label>Names (name+alias+parent)</label><input id="st-names"></div>
+      <div class="field"><label>URL contains</label><input id="st-url"></div>
+      <div class="field"><label>Parent studio <span class="hint">search by name, pick multiple</span></label>
+        <div class="crit">
+          <div class="picker" id="st-parent-picker" data-entity="studios">
+            <input type="text" class="picker-input" placeholder="search studios...">
+            <div class="picker-dropdown"></div>
+            <div class="picker-chips"></div>
+          </div>
+          <select id="st-parent-m"><option value="">-- unused --</option></select>
+        </div>
+      </div>
+      <div class="field"><label>Has parent</label>
+        <select id="st-hasparent"><option value="">-- any --</option><option value="true">true</option><option value="false">false</option></select>
+      </div>
+      <div class="field"><label>Is favorite</label>
+        <select id="st-isfav"><option value="">-- any --</option><option value="true">true</option><option value="false">false</option></select>
+      </div>
+    </div>
+    <div class="section-title">Sort &amp; Pagination</div>
+    <div class="field-grid">
+      <div class="field"><label>Sort</label><select id="st-sort"><option>NAME</option><option>CREATED_AT</option><option>UPDATED_AT</option></select></div>
+      <div class="field"><label>Direction</label><select id="st-dir"><option>ASC</option><option>DESC</option></select></div>
+      <div class="field"><label>Page</label><input id="st-page" type="number" value="1" min="1"></div>
+      <div class="field"><label>Per page</label><input id="st-perpage" type="number" value="25" min="1" max="100"></div>
+    </div>
+    <div class="toolbar">
+      <button data-run="studios">Run Query</button>
+      <button class="secondary" data-reset="studios" type="button">Reset filters</button>
+      <div class="spacer"></div>
+    </div>
+  </div>
+
+  <!-- TAGS -->
+  <div class="panel" id="panel-tags">
+    <div class="field-grid">
+      <div class="field"><label>Text (name+alias+description)</label><input id="t-text"></div>
+      <div class="field"><label>Names (name+alias)</label><input id="t-names"></div>
+      <div class="field"><label>Name only</label><input id="t-name"></div>
+      <div class="field"><label>Category ID</label><input id="t-categoryid"></div>
+    </div>
+    <div class="section-title">Sort &amp; Pagination</div>
+    <div class="field-grid">
+      <div class="field"><label>Sort</label><select id="t-sort"><option>NAME</option><option>CREATED_AT</option><option>UPDATED_AT</option></select></div>
+      <div class="field"><label>Direction</label><select id="t-dir"><option>ASC</option><option>DESC</option></select></div>
+      <div class="field"><label>Page</label><input id="t-page" type="number" value="1" min="1"></div>
+      <div class="field"><label>Per page</label><input id="t-perpage" type="number" value="25" min="1" max="100"></div>
+    </div>
+    <div class="toolbar">
+      <button data-run="tags">Run Query</button>
+      <button class="secondary" data-reset="tags" type="button">Reset filters</button>
+      <div class="spacer"></div>
+    </div>
+  </div>
+
+  <!-- CUSTOM -->
+  <div class="panel" id="panel-custom">
+    <p class="note">Write any GraphQL query/mutation supported by the schema (e.g. <span class="pill">findScenesBySceneFingerprints</span>, <span class="pill">queryEdits</span>) and pass variables as JSON.</p>
+    <div class="field"><label>Query</label>
+      <textarea id="c-query" class="code">query QueryScenes($input: SceneQueryInput!) {
+  queryScenes(input: $input) {
+    count
+    scenes { id title release_date }
+  }
+}</textarea>
+    </div>
+    <div class="field" style="margin-top:10px;"><label>Variables (JSON)</label>
+      <textarea id="c-vars" class="code" style="min-height:80px;">{
+  "input": { "page": 1, "per_page": 10 }
+}</textarea>
+    </div>
+    <div class="toolbar">
+      <button data-run="custom">Run Query</button>
+      <div class="spacer"></div>
+    </div>
+  </div>
+
+  <div id="results"></div>
+</main>
+
+<script>
+const MODIFIERS = ["EQUALS","NOT_EQUALS","GREATER_THAN","LESS_THAN","IS_NULL","NOT_NULL","INCLUDES_ALL","INCLUDES","EXCLUDES"];
+document.querySelectorAll('select[id$="-m"]').forEach(sel => {
+  MODIFIERS.forEach(m => {
+    const o = document.createElement('option');
+    o.value = m; o.textContent = m;
+    sel.appendChild(o);
+  });
+});
+
+const $ = id => document.getElementById(id);
+
+// ---- theme ----
+const savedTheme = localStorage.getItem('stashdb_theme');
+if (savedTheme === 'dark' || savedTheme === 'light') {
+  document.documentElement.setAttribute('data-theme', savedTheme);
+}
+function currentTheme() {
+  const attr = document.documentElement.getAttribute('data-theme');
+  if (attr) return attr;
+  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+}
+$('themeToggleBtn').addEventListener('click', () => {
+  const next = currentTheme() === 'dark' ? 'light' : 'dark';
+  document.documentElement.setAttribute('data-theme', next);
+  localStorage.setItem('stashdb_theme', next);
+});
+
+// ---- connection persistence ----
+const savedUrl = localStorage.getItem('stashdb_url');
+const savedKey = localStorage.getItem('stashdb_apikey');
+if (savedUrl) $('instanceUrl').value = savedUrl;
+if (savedKey) $('apiKey').value = savedKey;
+
+$('saveConnBtn').addEventListener('click', () => {
+  localStorage.setItem('stashdb_url', $('instanceUrl').value.trim());
+  localStorage.setItem('stashdb_apikey', $('apiKey').value.trim());
+  $('connStatus').textContent = 'Saved to this browser.';
+  setTimeout(() => $('connStatus').textContent = '', 2000);
+});
+$('showKeyBtn').addEventListener('click', () => {
+  const el = $('apiKey');
+  el.type = el.type === 'password' ? 'text' : 'password';
+});
+
+// ---- stash-box endpoints pulled from this Stash instance's own config ----
+// (Settings > Metadata Providers > Stash-box Endpoints). Only works when this
+// page is loaded through the Stash app (same-origin /graphql), which is the
+// case when opened via the toolbar button added by this plugin.
+let stashBoxes = [];
+async function loadStashBoxes() {
+  const sel = $('stashBoxSelect');
+  try {
+    const resp = await fetch('/graphql', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        query: `query { configuration { general { stashBoxes { name endpoint api_key } } } }`
+      })
+    });
+    const json = await resp.json();
+    if (json.errors && json.errors.length) throw new Error(json.errors[0].message);
+    stashBoxes = json?.data?.configuration?.general?.stashBoxes || [];
+  } catch (e) {
+    stashBoxes = [];
+  }
+
+  sel.innerHTML = '<option value="">Manual / Custom</option>';
+  stashBoxes.forEach((sb, idx) => {
+    const o = document.createElement('option');
+    o.value = String(idx);
+    o.textContent = `${sb.name || '(unnamed)'} — ${sb.endpoint}`;
+    sel.appendChild(o);
+  });
+
+  if (!stashBoxes.length) {
+    $('connStatus').textContent = 'No Stash-box endpoints found (open this page from the Stash toolbar to auto-detect them, or enter connection details manually).';
+    return;
+  }
+
+  $('connStatus').textContent = `Loaded ${stashBoxes.length} endpoint(s) from Stash settings.`;
+  setTimeout(() => { if ($('connStatus').textContent.startsWith('Loaded')) $('connStatus').textContent = ''; }, 4000);
+
+  // re-select whichever endpoint was last picked, if any
+  const savedEndpoint = localStorage.getItem('stashdb_selected_box');
+  if (savedEndpoint) {
+    const idx = stashBoxes.findIndex(sb => sb.endpoint === savedEndpoint);
+    if (idx >= 0) {
+      sel.value = String(idx);
+      applyStashBox(idx, false);
+    }
+  }
+}
+function applyStashBox(idx, persistSelection = true) {
+  const sb = stashBoxes[idx];
+  if (!sb) return;
+  $('instanceUrl').value = sb.endpoint;
+  $('apiKey').value = sb.api_key;
+  localStorage.setItem('stashdb_url', sb.endpoint);
+  localStorage.setItem('stashdb_apikey', sb.api_key);
+  if (persistSelection) localStorage.setItem('stashdb_selected_box', sb.endpoint);
+}
+$('stashBoxSelect').addEventListener('change', () => {
+  const v = $('stashBoxSelect').value;
+  if (v === '') { localStorage.removeItem('stashdb_selected_box'); return; }
+  applyStashBox(Number(v));
+});
+loadStashBoxes();
+
+// ---- tabs ----
+document.querySelectorAll('.tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+    btn.classList.add('active');
+    $('panel-' + btn.dataset.tab).classList.add('active');
+  });
+});
+
+// ---- helpers ----
+function str(id) { const v = $(id).value.trim(); return v === '' ? undefined : v; }
+function num(id) { const v = $(id).value.trim(); return v === '' ? undefined : Number(v); }
+function boolSel(id) { const v = $(id).value; return v === '' ? undefined : v === 'true'; }
+function idList(id) {
+  const v = $(id).value.trim();
+  if (v === '') return [];
+  return v.split(',').map(s => s.trim()).filter(Boolean);
+}
+// generic criterion: value input + modifier select. Only included if modifier chosen.
+function critSimple(vId, mId, transform) {
+  const m = $(mId).value;
+  if (!m) return undefined;
+  const raw = $(vId).value.trim();
+  return { value: transform ? transform(raw) : raw, modifier: m };
+}
+function critMulti(vId, mId) {
+  const m = $(mId).value;
+  if (!m) return undefined;
+  return { value: idList(vId), modifier: m };
+}
+// criterion backed by a name-search chip picker instead of a raw text input
+function critPicker(pickerId, mId) {
+  const m = $(mId).value;
+  if (!m) return undefined;
+  const ids = (pickerState[pickerId] || []).map(x => x.id);
+  return { value: ids, modifier: m };
+}
+function critBodyMod(locId, descId, mId) {
+  const m = $(mId).value;
+  if (!m) return undefined;
+  const loc = $(locId).value.trim();
+  const desc = $(descId).value.trim();
+  return { location: loc || undefined, description: desc || undefined, modifier: m };
+}
+function critEnum(vId, mId) {
+  const m = $(mId).value;
+  if (!m) return undefined;
+  const v = $(vId).value;
+  return { value: v || undefined, modifier: m };
+}
+function omitEmpty(obj) {
+  const out = {};
+  for (const k in obj) if (obj[k] !== undefined) out[k] = obj[k];
+  return out;
+}
+
+// ---- GraphQL execution ----
+async function runGraphQL(query, variables) {
+  const url = $('instanceUrl').value.trim();
+  const key = $('apiKey').value.trim();
+  if (!url) throw new Error('Instance GraphQL URL is required.');
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'ApiKey': key
+    },
+    body: JSON.stringify({ query, variables })
+  });
+  const text = await resp.text();
+  let json;
+  try { json = JSON.parse(text); }
+  catch { throw new Error(`Non-JSON response (HTTP ${resp.status}):\n${text.slice(0, 500)}`); }
+  if (!resp.ok && !json.errors) {
+    throw new Error(`HTTP ${resp.status}: ${text.slice(0, 500)}`);
+  }
+  if (json.errors && json.errors.length) {
+    throw new Error(json.errors.map(e => e.message).join('\n'));
+  }
+  return json.data;
+}
+
+// ---- queries ----
+const QUERIES = {
+  scenes: `query QueryScenes($input: SceneQueryInput!) {
+  queryScenes(input: $input) {
+    count
+    scenes {
+      id title release_date date duration code director
+      urls { url }
+      studio { id name }
+      tags { id name }
+      performers { as performer { id name disambiguation } }
+      images { url }
+    }
+  }
+}`,
+  performers: `query QueryPerformers($input: PerformerQueryInput!) {
+  queryPerformers(input: $input) {
+    count
+    performers {
+      id name disambiguation aliases gender country ethnicity
+      eye_color hair_color height birth_date death_date
+      career_start_year career_end_year breast_type
+      cup_size band_size waist_size hip_size
+      scene_count is_favorite
+      urls { url }
+      images { url }
+    }
+  }
+}`,
+  studios: `query QueryStudios($input: StudioQueryInput!) {
+  queryStudios(input: $input) {
+    count
+    studios {
+      id name aliases is_favorite
+      urls { url }
+      parent { id name }
+      images { url }
+    }
+  }
+}`,
+  tags: `query QueryTags($input: TagQueryInput!) {
+  queryTags(input: $input) {
+    count
+    tags {
+      id name description aliases
+      category { id name }
+    }
+  }
+}`
+};
+
+// ---- name-search chip pickers (used for multi-ID criterion fields) ----
+const pickerState = {};
+
+const PICKER_QUERIES = {
+  tags: {
+    query: `query($input: TagQueryInput!) { queryTags(input: $input) { tags { id name } } }`,
+    buildVars: term => ({ input: { name: term, per_page: 10, sort: 'NAME', direction: 'ASC' } }),
+    items: d => d.queryTags.tags,
+    label: t => t.name
+  },
+  performers: {
+    query: `query($input: PerformerQueryInput!) { queryPerformers(input: $input) { performers { id name disambiguation } } }`,
+    buildVars: term => ({ input: { names: term, per_page: 10 } }),
+    items: d => d.queryPerformers.performers,
+    label: p => p.name + (p.disambiguation ? ` (${p.disambiguation})` : '')
+  },
+  studios: {
+    query: `query($input: StudioQueryInput!) { queryStudios(input: $input) { studios { id name } } }`,
+    buildVars: term => ({ input: { names: term, per_page: 10 } }),
+    items: d => d.queryStudios.studios,
+    label: s => s.name
+  }
+};
+
+function debounce(fn, ms) {
+  let t;
+  return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); };
+}
+
+function renderChips(container) {
+  const chipsEl = container.querySelector('.picker-chips');
+  const state = pickerState[container.id] || [];
+  chipsEl.innerHTML = state.map((x, idx) =>
+    `<span class="chip">${escapeHtml(x.name)}<button type="button" class="chip-remove" data-idx="${idx}">&times;</button></span>`
+  ).join('');
+  chipsEl.querySelectorAll('.chip-remove').forEach(btn => {
+    btn.addEventListener('click', () => {
+      pickerState[container.id].splice(Number(btn.dataset.idx), 1);
+      renderChips(container);
+    });
+  });
+}
+
+function clearPicker(container) {
+  pickerState[container.id] = [];
+  renderChips(container);
+}
+
+function initPicker(container) {
+  const cfg = PICKER_QUERIES[container.dataset.entity];
+  const input = container.querySelector('.picker-input');
+  const dropdown = container.querySelector('.picker-dropdown');
+  pickerState[container.id] = [];
+
+  const doSearch = debounce(async term => {
+    if (!term.trim()) { dropdown.style.display = 'none'; dropdown.innerHTML = ''; return; }
+    try {
+      const data = await runGraphQL(cfg.query, cfg.buildVars(term.trim()));
+      const selected = new Set(pickerState[container.id].map(x => x.id));
+      const items = cfg.items(data).filter(i => !selected.has(i.id));
+      dropdown.innerHTML = items.length
+        ? items.map(i => `<div class="picker-item" data-id="${i.id}" data-label="${escapeHtml(cfg.label(i))}">${escapeHtml(cfg.label(i))}</div>`).join('')
+        : '<div class="picker-item picker-empty">No matches</div>';
+      dropdown.style.display = 'block';
+    } catch (err) {
+      dropdown.innerHTML = `<div class="picker-item picker-empty">${escapeHtml(err.message)}</div>`;
+      dropdown.style.display = 'block';
+    }
+  }, 300);
+
+  input.addEventListener('input', () => doSearch(input.value));
+  input.addEventListener('focus', () => { if (input.value.trim()) doSearch(input.value); });
+  document.addEventListener('click', e => {
+    if (!container.contains(e.target)) dropdown.style.display = 'none';
+  });
+  dropdown.addEventListener('click', e => {
+    const item = e.target.closest('.picker-item[data-id]');
+    if (!item) return;
+    pickerState[container.id].push({ id: item.dataset.id, name: item.dataset.label });
+    input.value = '';
+    dropdown.style.display = 'none';
+    renderChips(container);
+  });
+}
+
+document.querySelectorAll('.picker').forEach(initPicker);
+
+function collectScenes() {
+  return omitEmpty({
+    title: str('s-title'),
+    url: str('s-url'),
+    parentStudio: str('s-parentStudio'),
+    alias: critSimple('s-alias-v', 's-alias-m'),
+    code: critSimple('s-code-v', 's-code-m'),
+    date: critSimple('s-date-v', 's-date-m'),
+    production_date: critSimple('s-proddate-v', 's-proddate-m'),
+    studios: critPicker('s-studios-picker', 's-studios-m'),
+    tags: critPicker('s-tags-picker', 's-tags-m'),
+    performers: critPicker('s-performers-picker', 's-performers-m'),
+    fingerprints: critMulti('s-fingerprints-v', 's-fingerprints-m'),
+    favorites: str('s-favorites'),
+    has_fingerprint_submissions: boolSel('s-hasfp'),
+    page: num('s-page') || 1,
+    per_page: num('s-perpage') || 25,
+    direction: $('s-dir').value,
+    sort: $('s-sort').value
+  });
+}
+function collectPerformers() {
+  return omitEmpty({
+    names: str('p-names'),
+    name: str('p-name'),
+    alias: str('p-alias'),
+    disambiguation: critSimple('p-disambig-v', 'p-disambig-m'),
+    url: str('p-url'),
+    gender: str('p-gender'),
+    ethnicity: str('p-ethnicity'),
+    country: critSimple('p-country-v', 'p-country-m'),
+    birthdate: critSimple('p-birthdate-v', 'p-birthdate-m'),
+    deathdate: critSimple('p-deathdate-v', 'p-deathdate-m'),
+    birth_year: critSimple('p-birthyear-v', 'p-birthyear-m', Number),
+    age: critSimple('p-age-v', 'p-age-m', Number),
+    eye_color: critEnum('p-eyecolor-v', 'p-eyecolor-m'),
+    hair_color: critEnum('p-haircolor-v', 'p-haircolor-m'),
+    height: critSimple('p-height-v', 'p-height-m', Number),
+    cup_size: critSimple('p-cupsize-v', 'p-cupsize-m'),
+    band_size: critSimple('p-bandsize-v', 'p-bandsize-m', Number),
+    waist_size: critSimple('p-waistsize-v', 'p-waistsize-m', Number),
+    hip_size: critSimple('p-hipsize-v', 'p-hipsize-m', Number),
+    breast_type: critEnum('p-breasttype-v', 'p-breasttype-m'),
+    career_start_year: critSimple('p-careerstart-v', 'p-careerstart-m', Number),
+    career_end_year: critSimple('p-careerend-v', 'p-careerend-m', Number),
+    tattoos: critBodyMod('p-tattoos-loc', 'p-tattoos-desc', 'p-tattoos-m'),
+    piercings: critBodyMod('p-piercings-loc', 'p-piercings-desc', 'p-piercings-m'),
+    is_favorite: boolSel('p-isfav'),
+    performed_with: str('p-performedwith'),
+    studio_id: str('p-studioid'),
+    page: num('p-page') || 1,
+    per_page: num('p-perpage') || 25,
+    direction: $('p-dir').value,
+    sort: $('p-sort').value
+  });
+}
+function collectStudios() {
+  return omitEmpty({
+    name: str('st-name'),
+    names: str('st-names'),
+    url: str('st-url'),
+    parent: critPicker('st-parent-picker', 'st-parent-m'),
+    has_parent: boolSel('st-hasparent'),
+    is_favorite: boolSel('st-isfav'),
+    page: num('st-page') || 1,
+    per_page: num('st-perpage') || 25,
+    direction: $('st-dir').value,
+    sort: $('st-sort').value
+  });
+}
+function collectTags() {
+  return omitEmpty({
+    text: str('t-text'),
+    names: str('t-names'),
+    name: str('t-name'),
+    category_id: str('t-categoryid'),
+    page: num('t-page') || 1,
+    per_page: num('t-perpage') || 25,
+    direction: $('t-dir').value,
+    sort: $('t-sort').value
+  });
+}
+
+const COLLECTORS = { scenes: collectScenes, performers: collectPerformers, studios: collectStudios, tags: collectTags };
+const RESULT_KEY = { scenes: 'scenes', performers: 'performers', studios: 'studios', tags: 'tags' };
+const QUERY_ROOT = { scenes: 'queryScenes', performers: 'queryPerformers', studios: 'queryStudios', tags: 'queryTags' };
+
+const COLUMNS = {
+  scenes: [
+    ['id', s => s.id],
+    ['title', s => s.title || ''],
+    ['date', s => s.release_date || s.date || ''],
+    ['studio', s => s.studio ? s.studio.name : ''],
+    ['performers', s => (s.performers || []).map(p => p.performer.name + (p.as ? ` (as ${p.as})` : '')).join(', ')],
+    ['tags', s => (s.tags || []).map(t => t.name).join(', ')],
+    ['duration', s => s.duration ?? ''],
+    ['code', s => s.code || '']
+  ],
+  performers: [
+    ['id', p => p.id],
+    ['name', p => p.name + (p.disambiguation ? ` (${p.disambiguation})` : '')],
+    ['gender', p => p.gender || ''],
+    ['country', p => p.country || ''],
+    ['ethnicity', p => p.ethnicity || ''],
+    ['birth_date', p => p.birth_date || ''],
+    ['height', p => p.height ?? ''],
+    ['scene_count', p => p.scene_count ?? ''],
+    ['aliases', p => (p.aliases || []).join(', ')]
+  ],
+  studios: [
+    ['id', s => s.id],
+    ['name', s => s.name],
+    ['parent', s => s.parent ? s.parent.name : ''],
+    ['aliases', s => (s.aliases || []).join(', ')],
+    ['urls', s => (s.urls || []).map(u => u.url).join(', ')]
+  ],
+  tags: [
+    ['id', t => t.id],
+    ['name', t => t.name],
+    ['category', t => t.category ? t.category.name : ''],
+    ['description', t => t.description || ''],
+    ['aliases', t => (t.aliases || []).join(', ')]
+  ]
+};
+
+let lastEntity = null;
+let lastResult = null;
+let lastQuery = null;
+let lastVariables = null;
+let viewMode = localStorage.getItem('stashdb_viewmode') === 'cards' ? 'cards' : 'table';
+
+async function run(entity) {
+  const resultsEl = $('results');
+  resultsEl.innerHTML = '<p class="note">Running query...</p>';
+  try {
+    let data, input, query;
+    if (entity === 'custom') {
+      query = $('c-query').value;
+      let vars = {};
+      try { vars = JSON.parse($('c-vars').value || '{}'); }
+      catch (e) { throw new Error('Variables must be valid JSON: ' + e.message); }
+      data = await runGraphQL(query, vars);
+      renderCustom(data, query, vars);
+      return;
+    }
+    input = COLLECTORS[entity]();
+    query = QUERIES[entity];
+    data = await runGraphQL(query, { input });
+    const result = data[QUERY_ROOT[entity]];
+    renderResults(entity, result, query, { input });
+  } catch (err) {
+    resultsEl.innerHTML = `<div class="error-box">${escapeHtml(err.message)}</div>`;
+  }
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+const ENTITY_PATH = { scenes: 'scenes', performers: 'performers', studios: 'studios', tags: 'tags' };
+function siteBaseUrl() {
+  return $('instanceUrl').value.trim().replace(/\/graphql\/?$/, '').replace(/\/$/, '');
+}
+function entityUrl(entity, id) {
+  return `${siteBaseUrl()}/${ENTITY_PATH[entity]}/${id}`;
+}
+
+// wraps text in a truncated span that reveals the full value in a hover tooltip
+function truncatedField(label, text) {
+  if (!text) return '';
+  return `<div class="card-line"><strong>${escapeHtml(label)}:</strong>
+    <span class="truncate-wrap"><span class="truncate">${escapeHtml(text)}</span><div class="tooltip">${escapeHtml(text)}</div></span>
+  </div>`;
+}
+
+const CARD_BODY = {
+  scenes: s => {
+    const meta = [s.release_date || s.date, s.studio ? s.studio.name : null].filter(Boolean).join(' • ');
+    const performersText = (s.performers || []).map(p => p.performer.name + (p.as ? ` (as ${p.as})` : '')).join(', ');
+    const tagsText = (s.tags || []).map(t => t.name).join(', ');
+    return `<div class="card-title"><a class="view-link-plain" href="${escapeHtml(entityUrl('scenes', s.id))}" target="_blank" rel="noopener noreferrer">${escapeHtml(s.title || '(untitled)')}</a></div>
+      ${meta ? `<div class="card-meta">${escapeHtml(meta)}</div>` : ''}
+      ${truncatedField('Performers', performersText)}
+      ${truncatedField('Tags', tagsText)}`;
+  },
+  performers: p => {
+    const meta = [p.gender, p.country, p.ethnicity].filter(Boolean).join(' • ');
+    return `<div class="card-title"><a class="view-link-plain" href="${escapeHtml(entityUrl('performers', p.id))}" target="_blank" rel="noopener noreferrer">${escapeHtml(p.name)}</a>${p.disambiguation ? ` <span class="card-meta">(${escapeHtml(p.disambiguation)})</span>` : ''}</div>
+      ${meta ? `<div class="card-meta">${escapeHtml(meta)}</div>` : ''}
+      ${truncatedField('Aliases', (p.aliases || []).join(', '))}`;
+  },
+  studios: s => {
+    return `<div class="card-title"><a class="view-link-plain" href="${escapeHtml(entityUrl('studios', s.id))}" target="_blank" rel="noopener noreferrer">${escapeHtml(s.name)}</a></div>
+      ${s.parent ? `<div class="card-meta">Parent: ${escapeHtml(s.parent.name)}</div>` : ''}
+      ${truncatedField('Aliases', (s.aliases || []).join(', '))}
+      ${truncatedField('URLs', (s.urls || []).map(u => u.url).join(', '))}`;
+  },
+  tags: t => {
+    return `<div class="card-title"><a class="view-link-plain" href="${escapeHtml(entityUrl('tags', t.id))}" target="_blank" rel="noopener noreferrer">${escapeHtml(t.name)}</a></div>
+      ${t.category ? `<div class="card-meta">${escapeHtml(t.category.name)}</div>` : ''}
+      ${truncatedField('Description', t.description)}
+      ${truncatedField('Aliases', (t.aliases || []).join(', '))}`;
+  }
+};
+
+function cardsHtml(entity, items) {
+  return '<div class="card-grid">' + items.map(item => {
+    const imgUrl = item.images && item.images[0] ? item.images[0].url : null;
+    const thumb = imgUrl
+      ? `<img class="card-thumb" src="${escapeHtml(imgUrl)}" loading="lazy" alt="">`
+      : '<div class="card-thumb-placeholder"></div>';
+    return `<div class="card">
+      ${thumb}
+      <div class="card-body">
+        ${CARD_BODY[entity](item)}
+        <div class="card-footer">
+          <span class="id-cell" title="Click to copy">${escapeHtml(item.id)}</span>
+          <a class="view-link" href="${escapeHtml(entityUrl(entity, item.id))}" target="_blank" rel="noopener noreferrer">View &#8599;</a>
+        </div>
+      </div>
+    </div>`;
+  }).join('') + '</div>';
+}
+
+function tableHtml(entity, items) {
+  const cols = COLUMNS[entity];
+  let html = '<table><thead><tr><th></th>';
+  cols.forEach(([name]) => html += `<th>${name}</th>`);
+  html += '<th></th></tr></thead><tbody>';
+  items.forEach(item => {
+    html += '<tr>';
+    const imgUrl = item.images && item.images[0] ? item.images[0].url : null;
+    html += imgUrl
+      ? `<td><img class="thumb" src="${escapeHtml(imgUrl)}" loading="lazy" alt=""></td>`
+      : '<td><div class="thumb-placeholder"></div></td>';
+    cols.forEach(([name, fn]) => {
+      let val;
+      try { val = fn(item); } catch { val = ''; }
+      html += name === 'id'
+        ? `<td class="id-cell" title="Click to copy">${escapeHtml(val)}</td>`
+        : `<td>${escapeHtml(val)}</td>`;
+    });
+    html += `<td><a class="view-link" href="${escapeHtml(entityUrl(entity, item.id))}" target="_blank" rel="noopener noreferrer">View &#8599;</a></td>`;
+    html += '</tr>';
+  });
+  html += '</tbody></table>';
+  return html;
+}
+
+function renderResults(entity, result, query, variables) {
+  lastEntity = entity; lastResult = result; lastQuery = query; lastVariables = variables;
+  const resultsEl = $('results');
+  const items = result[RESULT_KEY[entity]];
+  const page = variables.input.page || 1;
+  const perPage = variables.input.per_page || 25;
+  const hasNext = page * perPage < result.count;
+  const hasPrev = page > 1;
+
+  let html = `<div class="result-header">
+    <span class="count-badge">${result.count}</span> total results
+    <button class="secondary view-toggle-btn ${viewMode === 'table' ? 'active-view' : ''}" data-view="table" type="button">Table</button>
+    <button class="secondary view-toggle-btn ${viewMode === 'cards' ? 'active-view' : ''}" data-view="cards" type="button">Cards</button>
+    <div class="spacer"></div>
+    <button class="secondary" id="prevPage" ${hasPrev ? '' : 'disabled'}>&larr; Prev</button>
+    <span class="note">Page ${page}</span>
+    <button class="secondary" id="nextPage" ${hasNext ? '' : 'disabled'}>Next &rarr;</button>
+  </div>`;
+
+  html += viewMode === 'cards' ? cardsHtml(entity, items) : tableHtml(entity, items);
+
+  html += `<details style="margin-top:14px;"><summary>Raw JSON</summary><pre class="json">${escapeHtml(JSON.stringify(result, null, 2))}</pre></details>`;
+  html += `<details><summary>GraphQL query sent</summary><pre class="json">${escapeHtml(query)}\n\nVariables:\n${escapeHtml(JSON.stringify(variables, null, 2))}</pre></details>`;
+
+  resultsEl.innerHTML = html;
+
+  const idInput = entity === 'scenes' ? 's-page' : entity === 'performers' ? 'p-page' : entity === 'studios' ? 'st-page' : 't-page';
+  if (hasPrev) $('prevPage').addEventListener('click', () => { $(idInput).value = page - 1; run(entity); });
+  if (hasNext) $('nextPage').addEventListener('click', () => { $(idInput).value = page + 1; run(entity); });
+
+  resultsEl.querySelectorAll('.view-toggle-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      viewMode = btn.dataset.view;
+      localStorage.setItem('stashdb_viewmode', viewMode);
+      renderResults(lastEntity, lastResult, lastQuery, lastVariables);
+    });
+  });
+
+  resultsEl.querySelectorAll('.id-cell').forEach(cell => {
+    cell.addEventListener('click', () => navigator.clipboard?.writeText(cell.textContent));
+  });
+}
+
+function renderCustom(data, query, vars) {
+  const resultsEl = $('results');
+  resultsEl.innerHTML = `<pre class="json">${escapeHtml(JSON.stringify(data, null, 2))}</pre>
+    <details><summary>Query sent</summary><pre class="json">${escapeHtml(query)}\n\nVariables:\n${escapeHtml(JSON.stringify(vars, null, 2))}</pre></details>`;
+}
+
+document.querySelectorAll('[data-run]').forEach(btn => {
+  btn.addEventListener('click', () => run(btn.dataset.run));
+});
+document.querySelectorAll('[data-reset]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const panel = $('panel-' + btn.dataset.reset);
+    panel.querySelectorAll('input').forEach(i => { if (i.type !== 'number') i.value = ''; });
+    panel.querySelectorAll('select').forEach(s => { s.selectedIndex = 0; });
+    panel.querySelectorAll('.picker').forEach(clearPicker);
+  });
+});
+</script>
+</body>
+</html>

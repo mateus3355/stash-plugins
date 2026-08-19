@@ -1,0 +1,27 @@
+name: List Error Files
+description: Finds corrupted or errored files in the library and tags them with a 'Corrupted File' tag.
+version: 1.0
+url: https://github.com/stashapp/stash
+
+exec:
+  - python
+  - "{pluginDir}/listErrorFiles.py"
+interface: raw
+
+tasks:
+  - name: Tag Corrupted Scenes
+    description: >
+      Triggers a Generate task (covers/previews/sprites) so ffmpeg reads
+      every file, then tails `journalctl -u stash` for error lines to find
+      the corrupted ones. Requires Stash to run as a systemd service
+      named "stash" with journal read access.
+    defaultArgs:
+      mode: tag_corrupted
+  - name: Create Tag
+    description: Creates the 'Corrupted File' tag used by this plugin.
+    defaultArgs:
+      mode: create_tag
+  - name: Remove Tag
+    description: Removes the 'Corrupted File' tag from all scenes and deletes the tag from the system.
+    defaultArgs:
+      mode: remove_tag

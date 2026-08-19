@@ -1,0 +1,795 @@
+<title>Sift Console</title>
+<style>
+  :root {
+    --ink: #efece6; --panel: #ffffff; --panel-raised: #f7f5f1; --line: #ddd7cc;
+    --text: #17181b; --text-dim: #6b6558;
+    --signal: #d9531c; --signal-ink: #ffffff; --signal-soft: rgba(217,83,28,.10);
+    --go: #1f9d5c; --go-soft: rgba(31,157,92,.12);
+    --stop: #d63d3d; --stop-soft: rgba(214,61,61,.12);
+    --gold: #b8790a;
+    --shadow: rgba(20,15,5,.10);
+    --key-face: #ffffff; --key-edge: #c9c2b4; --stage-pattern: rgba(0,0,0,.035);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ink: #0b0d11; --panel: #14171d; --panel-raised: #1c2027; --line: #262b34;
+      --text: #e7e9ee; --text-dim: #8a92a0;
+      --signal: #ff6a3d; --signal-ink: #1a0a04; --signal-soft: rgba(255,106,61,.14);
+      --go: #37c978; --go-soft: rgba(55,201,120,.14);
+      --stop: #ef4444; --stop-soft: rgba(239,68,68,.14);
+      --gold: #f2b632;
+      --shadow: rgba(0,0,0,.5);
+      --key-face: #232730; --key-edge: #333944; --stage-pattern: rgba(255,255,255,.035);
+    }
+  }
+  :root[data-theme="dark"] {
+    --ink: #0b0d11; --panel: #14171d; --panel-raised: #1c2027; --line: #262b34;
+    --text: #e7e9ee; --text-dim: #8a92a0;
+    --signal: #ff6a3d; --signal-ink: #1a0a04; --signal-soft: rgba(255,106,61,.14);
+    --go: #37c978; --go-soft: rgba(55,201,120,.14);
+    --stop: #ef4444; --stop-soft: rgba(239,68,68,.14);
+    --gold: #f2b632;
+    --shadow: rgba(0,0,0,.5);
+    --key-face: #232730; --key-edge: #33394d; --stage-pattern: rgba(255,255,255,.035);
+  }
+  :root[data-theme="light"] {
+    --ink: #efece6; --panel: #ffffff; --panel-raised: #f7f5f1; --line: #ddd7cc;
+    --text: #17181b; --text-dim: #6b6558;
+    --signal: #d9531c; --signal-ink: #ffffff; --signal-soft: rgba(217,83,28,.10);
+    --go: #1f9d5c; --go-soft: rgba(31,157,92,.12);
+    --stop: #d63d3d; --stop-soft: rgba(214,61,61,.12);
+    --gold: #b8790a;
+    --shadow: rgba(20,15,5,.10);
+    --key-face: #ffffff; --key-edge: #c9c2b4; --stage-pattern: rgba(0,0,0,.035);
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; background: var(--ink); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    display: flex; flex-direction: column; min-height: 100vh;
+  }
+  .mono { font-family: ui-monospace, "SF Mono", "Cascadia Mono", "Cascadia Code", Consolas, "DejaVu Sans Mono", monospace; }
+  ::selection { background: var(--signal-soft); }
+  button { font: inherit; }
+
+  /* ---------- Top bar ---------- */
+  header {
+    flex: none; display: flex; align-items: center; gap: 18px;
+    padding: 10px 18px; border-bottom: 1px solid var(--line); background: var(--panel);
+  }
+  .mark { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 14px; letter-spacing: .02em; white-space: nowrap; }
+  .mark .glyph {
+    width: 18px; height: 18px; border-radius: 4px; background: var(--signal);
+    display: inline-flex; align-items: center; justify-content: center;
+    color: var(--signal-ink); font-size: 11px; font-weight: 800; font-family: ui-monospace, monospace;
+  }
+  .filter-chip {
+    display: flex; align-items: center; gap: 9px; padding: 5px 10px 5px 8px;
+    background: var(--panel-raised); border: 1px solid var(--line); border-radius: 7px;
+    font-size: 12.5px; color: var(--text-dim); min-width: 0;
+  }
+  .filter-chip strong { color: var(--text); font-weight: 600; }
+  .filter-chip .fx { flex: none; opacity: .8; }
+  .filter-progress { display: flex; align-items: center; gap: 6px; flex: none; }
+  .filter-progress .bar {
+    width: 64px; height: 5px; border-radius: 999px; background: var(--line); overflow: hidden;
+  }
+  .filter-progress .bar > i {
+    display: block; height: 100%; background: var(--go); border-radius: inherit;
+    transition: width .2s ease;
+  }
+  .filter-progress .pct { font-family: ui-monospace, monospace; font-size: 11px; color: var(--text-dim); white-space: nowrap; }
+  .filter-edit {
+    flex: none; background: transparent; border: 1px solid var(--line); color: var(--text-dim);
+    border-radius: 6px; padding: 3px 8px; font-size: 11px; cursor: pointer;
+  }
+  .filter-edit:hover { color: var(--text); border-color: var(--text-dim); }
+  .top-spacer { flex: 1; min-width: 12px; }
+  .position {
+    font-size: 13px; color: var(--text-dim); white-space: nowrap; font-variant-numeric: tabular-nums;
+  }
+  .position b { color: var(--text); font-weight: 600; }
+  .keys-btn {
+    flex: none; display: flex; align-items: center; gap: 7px;
+    background: var(--panel-raised); border: 1px solid var(--line); color: var(--text);
+    padding: 7px 12px; border-radius: 8px; cursor: pointer; font-size: 12.5px; font-weight: 600;
+  }
+  .keys-btn:hover { border-color: var(--signal); color: var(--signal); }
+  .keys-btn svg { width: 15px; height: 15px; }
+
+  /* ---------- Stage row ---------- */
+  main { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+  .stage-row {
+    flex: 1; display: grid; grid-template-columns: 92px minmax(0,1fr) 92px;
+    gap: 14px; padding: 18px 18px 10px; min-height: 0;
+  }
+  .nav-rail {
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    cursor: pointer; color: var(--text-dim); transition: border-color .12s, color .12s, background .12s;
+    padding: 14px 6px;
+  }
+  .nav-rail:hover { border-color: var(--signal); color: var(--signal); background: var(--signal-soft); }
+  .nav-rail svg { width: 22px; height: 22px; }
+  .nav-rail .lbl { font-size: 10.5px; font-weight: 700; letter-spacing: .08em; }
+  .nav-rail .kc { margin-top: 2px; }
+
+  .stage-col { display: flex; flex-direction: column; gap: 8px; min-height: 0; min-width: 0; }
+
+  .stage {
+    position: relative; border-radius: 14px; border: 1px solid var(--line);
+    background:
+      repeating-linear-gradient(135deg, var(--stage-pattern) 0 2px, transparent 2px 14px),
+      var(--panel);
+    display: flex; align-items: center; justify-content: center; min-height: 0;
+    overflow: hidden; flex: 1;
+  }
+  .stage-icon { color: var(--text-dim); opacity: .5; width: 72px; height: 72px; }
+  .stage-empty { display: none; flex-direction: column; align-items: center; gap: 6px; color: var(--text-dim); text-align: center; padding: 0 20px; }
+  .stage-empty .big { font-size: 32px; }
+  .stage-empty h3 { margin: 2px 0 0; color: var(--text); font-size: 16px; }
+  .stage-empty p { margin: 0; font-size: 12.5px; max-width: 34ch; }
+  .stage.empty .stage-icon { display: none; }
+  .stage.empty .stage-empty { display: flex; }
+  .stage-badge {
+    position: absolute; top: 12px; left: 12px; display: flex; gap: 6px;
+  }
+  .badge {
+    font-size: 11px; padding: 4px 8px; border-radius: 6px; background: rgba(0,0,0,.45);
+    color: #fff; font-family: ui-monospace, monospace; letter-spacing: .02em;
+  }
+  .stage-organized {
+    position: absolute; top: 12px; right: 12px; display: flex; align-items: center; gap: 5px;
+    font-size: 11px; padding: 4px 9px 4px 7px; border-radius: 999px; font-weight: 700;
+    background: var(--go-soft); color: var(--go); border: 1px solid transparent;
+  }
+  .stage-organized.off { background: rgba(120,120,120,.14); color: var(--text-dim); }
+  .stage-organized svg { width: 12px; height: 12px; }
+
+  .scrubber-wrap { flex: none; display: flex; align-items: center; gap: 10px; }
+  .scrubber {
+    flex: 1; display: flex; gap: 2px; height: 46px; padding: 4px; min-width: 0;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 9px; overflow: hidden;
+  }
+  .sprite-frame {
+    flex: 1; min-width: 0; position: relative; border-radius: 4px; cursor: pointer;
+    background:
+      repeating-linear-gradient(135deg, var(--stage-pattern) 0 2px, transparent 2px 10px),
+      var(--panel-raised);
+    border: 1px solid transparent;
+  }
+  .sprite-frame:hover, .sprite-frame.active { border-color: var(--signal); }
+  .sprite-frame .tc {
+    position: absolute; left: 50%; bottom: calc(100% + 6px); transform: translateX(-50%);
+    background: var(--text); color: var(--panel); font-family: ui-monospace, monospace;
+    font-size: 10px; padding: 2px 5px; border-radius: 4px; white-space: nowrap;
+    opacity: 0; pointer-events: none; transition: opacity .1s ease;
+  }
+  .sprite-frame:hover .tc { opacity: 1; }
+  .scrubber-time {
+    flex: none; font-size: 11.5px; color: var(--text-dim); min-width: 76px; text-align: right;
+  }
+  .scrubber-time b { color: var(--text); font-weight: 700; }
+
+  .toast {
+    position: absolute; top: 14px; left: 50%; transform: translateX(-50%) translateY(-8px);
+    background: var(--panel-raised); border: 1px solid var(--line); color: var(--text);
+    padding: 7px 8px 7px 14px; border-radius: 999px; font-size: 12.5px; font-weight: 600;
+    box-shadow: 0 6px 18px var(--shadow); opacity: 0; pointer-events: none;
+    transition: opacity .16s ease, transform .16s ease; display: flex; align-items: center; gap: 9px;
+  }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); pointer-events: auto; }
+  .toast .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--go); flex: none; }
+  .toast.stop .dot { background: var(--stop); }
+  .toast.gold .dot { background: var(--gold); }
+  .toast .undo {
+    background: var(--line); border: none; color: var(--text); font-weight: 700; font-size: 11.5px;
+    padding: 4px 9px; border-radius: 999px; cursor: pointer; display: none;
+  }
+  .toast .undo:hover { background: var(--signal); color: var(--signal-ink); }
+  .toast.undoable .undo { display: inline-block; }
+
+  /* ---------- Meta strip ---------- */
+  .meta {
+    flex: none; padding: 12px 18px 6px; display: flex; flex-wrap: wrap; align-items: center; gap: 12px 18px;
+  }
+  .meta-title { font-size: 15px; font-weight: 700; letter-spacing: -.01em; white-space: nowrap; }
+  .meta-title .sub { font-weight: 400; color: var(--text-dim); font-family: ui-monospace, monospace; font-size: 12.5px; margin-left: 8px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip {
+    font-size: 11.5px; padding: 4px 9px; border-radius: 999px; background: var(--panel-raised);
+    border: 1px solid var(--line); color: var(--text-dim); display: flex; align-items: center; gap: 5px;
+  }
+  .chip.tag { color: var(--text); }
+  .chip .rm { cursor: pointer; opacity: .6; font-weight: 700; }
+  .chip .rm:hover { opacity: 1; color: var(--stop); }
+  .meta-spacer { flex: 1; }
+  .stars { display: flex; gap: 3px; align-items: center; }
+  .stars button {
+    background: none; border: none; cursor: pointer; padding: 2px; color: var(--line); line-height: 0;
+  }
+  .stars button svg { width: 18px; height: 18px; }
+  .stars button.on { color: var(--gold); }
+  .stars button:hover { color: var(--gold); }
+
+  /* ---------- Keybind dock ---------- */
+  .dock {
+    flex: none; border-top: 1px solid var(--line); background: var(--panel);
+    padding: 12px 18px 16px;
+  }
+  .dock-head {
+    display: flex; align-items: center; gap: 10px; margin-bottom: 10px;
+  }
+  .dock-head .lbl { font-size: 10.5px; font-weight: 700; letter-spacing: .1em; color: var(--text-dim); }
+  .dock-head .line { flex: 1; height: 1px; background: var(--line); }
+  .dock-grid {
+    display: flex; flex-wrap: wrap; gap: 8px;
+  }
+  .bind {
+    display: flex; align-items: center; gap: 8px; padding: 6px 10px 6px 6px;
+    background: var(--panel-raised); border: 1px solid var(--line); border-radius: 9px;
+  }
+  .keycap {
+    font-family: ui-monospace, monospace; font-size: 12px; font-weight: 700; min-width: 22px;
+    text-align: center; padding: 4px 6px; border-radius: 5px; background: var(--key-face);
+    border: 1px solid var(--key-edge); box-shadow: 0 1.5px 0 var(--key-edge); color: var(--text);
+  }
+  .bind .action { font-size: 12px; color: var(--text-dim); white-space: nowrap; }
+  .bind .val { font-size: 12px; font-weight: 600; color: var(--text); }
+  .bind.tag .keycap { border-color: var(--go); color: var(--go); }
+  .bind.stop .keycap { border-color: var(--stop); color: var(--stop); }
+  .bind.gold .keycap { border-color: var(--gold); color: var(--gold); }
+  .bind.nav .keycap { border-color: var(--signal); color: var(--signal); }
+  .edit-bindings {
+    flex: none; margin-left: auto; background: var(--signal); color: var(--signal-ink); border: none;
+    padding: 7px 13px; border-radius: 8px; font-size: 12px; font-weight: 700; cursor: pointer;
+  }
+  .edit-bindings:hover { filter: brightness(1.08); }
+  .dock-foot-row { display: flex; align-items: center; }
+
+  /* ---------- Editor slide-over ---------- */
+  .scrim {
+    position: fixed; inset: 0; background: rgba(0,0,0,.45); opacity: 0; pointer-events: none;
+    transition: opacity .18s ease; z-index: 10;
+  }
+  .scrim.show { opacity: 1; pointer-events: auto; }
+  .editor {
+    position: fixed; top: 0; right: 0; height: 100%; width: min(420px, 92vw);
+    background: var(--panel); border-left: 1px solid var(--line); z-index: 11;
+    transform: translateX(100%); transition: transform .2s ease;
+    display: flex; flex-direction: column; box-shadow: -12px 0 30px var(--shadow);
+  }
+  .editor.show { transform: translateX(0); }
+  .editor-head {
+    padding: 16px 18px; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 10px;
+  }
+  .editor-head h2 { font-size: 15px; margin: 0; flex: 1; }
+  .editor-close { background: none; border: none; color: var(--text-dim); cursor: pointer; font-size: 18px; line-height: 1; padding: 4px; }
+  .editor-close:hover { color: var(--text); }
+  .editor-body { flex: 1; overflow-y: auto; padding: 14px 18px; display: flex; flex-direction: column; gap: 8px; }
+  .editor-hint { font-size: 12px; color: var(--text-dim); margin: 0 0 4px; line-height: 1.5; }
+  .row {
+    display: grid; grid-template-columns: 44px 1fr 1fr auto; gap: 7px; align-items: center;
+  }
+  .row input.key {
+    font-family: ui-monospace, monospace; text-align: center; font-weight: 700;
+  }
+  .row select, .row input {
+    background: var(--panel-raised); border: 1px solid var(--line); color: var(--text);
+    border-radius: 6px; padding: 6px 7px; font-size: 12px; width: 100%;
+  }
+  .row .del { background: none; border: none; color: var(--text-dim); cursor: pointer; font-size: 15px; padding: 4px; }
+  .row .del:hover { color: var(--stop); }
+  .add-row {
+    margin-top: 4px; background: var(--panel-raised); border: 1px dashed var(--line); color: var(--text-dim);
+    border-radius: 8px; padding: 8px; font-size: 12px; cursor: pointer; font-weight: 600;
+  }
+  .add-row:hover { color: var(--text); border-color: var(--text-dim); }
+  .editor-foot { padding: 14px 18px; border-top: 1px solid var(--line); display: flex; gap: 8px; }
+  .btn-primary {
+    flex: 1; background: var(--signal); color: var(--signal-ink); border: none; border-radius: 8px;
+    padding: 9px; font-weight: 700; font-size: 13px; cursor: pointer;
+  }
+  .btn-primary:hover { filter: brightness(1.08); }
+  .btn-secondary {
+    background: var(--panel-raised); border: 1px solid var(--line); color: var(--text);
+    border-radius: 8px; padding: 9px 14px; font-size: 13px; cursor: pointer;
+  }
+  .btn-secondary:hover { border-color: var(--text-dim); }
+
+  @media (max-width: 720px) {
+    .stage-row { grid-template-columns: 56px minmax(0,1fr) 56px; }
+    .nav-rail .lbl, .nav-rail .kc { display: none; }
+    .filter-chip span.txt { display: none; }
+    header { gap: 10px; }
+  }
+</style>
+
+<header>
+  <div class="mark"><span class="glyph">S</span>Sift</div>
+  <div class="filter-chip">
+    <svg class="fx" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 5h16M7 12h10M10 19h4"/></svg>
+    <span class="txt" id="filterLabel">Filter — <strong>Organized: false</strong> · <strong>Rating ≤ 2</strong></span>
+    <div class="filter-progress" title="Scenes organized within this filter">
+      <div class="bar"><i id="filterBarFill" style="width:0%"></i></div>
+      <span class="pct mono" id="filterPct">0%</span>
+    </div>
+  </div>
+  <button class="filter-edit" id="changeFilter" type="button">Change</button>
+  <div class="top-spacer"></div>
+  <div class="position mono"><b id="posNow">1</b>&nbsp;/&nbsp;<span id="posTotal">6</span></div>
+  <button class="keys-btn" id="openEditor" type="button">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M8 14h8"/></svg>
+    Keybinds
+  </button>
+</header>
+
+<main>
+  <div class="stage-row">
+    <button class="nav-rail" id="prevBtn" type="button" title="Previous (A)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M15 18l-6-6 6-6"/></svg>
+      <span class="lbl">PREV</span>
+      <span class="keycap kc mono">A</span>
+    </button>
+
+    <div class="stage-col">
+      <div class="stage" id="stage">
+        <div class="stage-badge">
+          <span class="badge" id="badgeType">VIDEO · 07:42</span>
+          <span class="badge" id="badgeRes">1920×1080</span>
+        </div>
+        <div class="stage-organized off" id="organizedPill">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20 6L9 17l-5-5"/></svg>
+          Organized
+        </div>
+        <svg class="stage-icon" id="stageIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4">
+          <rect x="2.5" y="5" width="19" height="14" rx="2"/><path d="M2.5 8.5h19M7 5v3.5M17 5v3.5" />
+          <path d="M10.2 12.2l4 2.1-4 2.1z" fill="currentColor" stroke="none"/>
+        </svg>
+        <div class="stage-empty" id="stageEmpty">
+          <span class="big">🎉</span>
+          <h3>All caught up</h3>
+          <p>Every scene in this filter has been organized. Switch filters to keep going.</p>
+        </div>
+        <div class="toast" id="toast"><span class="dot"></span><span id="toastText">Tagged “Amateur”</span><button class="undo" id="toastUndo" type="button">Undo</button></div>
+      </div>
+      <div class="scrubber-wrap">
+        <div class="scrubber" id="scrubber" title="Scrubber sprite preview"></div>
+        <span class="scrubber-time mono" id="scrubberTime">hover to preview</span>
+      </div>
+    </div>
+
+    <button class="nav-rail" id="nextBtn" type="button" title="Next (D)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M9 18l6-6-6-6"/></svg>
+      <span class="lbl">NEXT</span>
+      <span class="keycap kc mono">D</span>
+    </button>
+  </div>
+
+  <div class="meta">
+    <div class="meta-title" id="metaTitle">Beachside_Afternoon_0842<span class="sub" id="metaStudio">Example Studio · Jane Doe</span></div>
+    <div class="chips" id="tagChips"></div>
+    <div class="meta-spacer"></div>
+    <div class="stars" id="stars">
+      <button data-v="1" type="button"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l3.1 6.6 7.2.8-5.4 4.9 1.5 7.1L12 17.9 5.6 21.4l1.5-7.1L1.7 9.4l7.2-.8z"/></svg></button>
+      <button data-v="2" type="button"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l3.1 6.6 7.2.8-5.4 4.9 1.5 7.1L12 17.9 5.6 21.4l1.5-7.1L1.7 9.4l7.2-.8z"/></svg></button>
+      <button data-v="3" type="button"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l3.1 6.6 7.2.8-5.4 4.9 1.5 7.1L12 17.9 5.6 21.4l1.5-7.1L1.7 9.4l7.2-.8z"/></svg></button>
+      <button data-v="4" type="button"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l3.1 6.6 7.2.8-5.4 4.9 1.5 7.1L12 17.9 5.6 21.4l1.5-7.1L1.7 9.4l7.2-.8z"/></svg></button>
+      <button data-v="5" type="button"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l3.1 6.6 7.2.8-5.4 4.9 1.5 7.1L12 17.9 5.6 21.4l1.5-7.1L1.7 9.4l7.2-.8z"/></svg></button>
+    </div>
+  </div>
+
+  <div class="dock">
+    <div class="dock-head"><span class="lbl">KEY BINDINGS</span><span class="line"></span></div>
+    <div class="dock-foot-row">
+      <div class="dock-grid" id="dockGrid"></div>
+      <button class="edit-bindings" id="openEditor2" type="button">Edit Bindings</button>
+    </div>
+  </div>
+</main>
+
+<div class="scrim" id="scrim"></div>
+<aside class="editor" id="editor">
+  <div class="editor-head">
+    <h2>Key Bindings</h2>
+    <button class="editor-close" id="closeEditor" type="button">✕</button>
+  </div>
+  <div class="editor-body">
+    <p class="editor-hint">Map any key to an action. Bindings apply while Sift is focused — press a key to fire it immediately, no clicking required.</p>
+    <div id="rowsHost"></div>
+    <button class="add-row" id="addRow" type="button">+ Add binding</button>
+  </div>
+  <div class="editor-foot">
+    <button class="btn-secondary" id="cancelEditor" type="button">Cancel</button>
+    <button class="btn-primary" id="saveEditor" type="button">Save bindings</button>
+  </div>
+</aside>
+
+<script>
+(function () {
+  "use strict";
+
+  var scenes = [
+    { file: "Beachside_Afternoon_0842", studio: "Example Studio", performer: "Jane Doe", dur: "07:42", res: "1920×1080", tags: ["Outdoor", "POV"], rating: 3, organized: false },
+    { file: "Rooftop_Session_0177", studio: "North Light Films", performer: "Casey Reyes", dur: "14:10", res: "2560×1440", tags: ["Amateur"], rating: 0, organized: false },
+    { file: "Studio_Loop_0093", studio: "Example Studio", performer: "Riley Kade", dur: "05:58", res: "1920×1080", tags: [], rating: 0, organized: true },
+    { file: "Backyard_Golden_Hour_0410", studio: "Independent", performer: "Jane Doe", dur: "09:21", res: "3840×2160", tags: ["Outdoor", "Amateur", "POV"], rating: 5, organized: false },
+    { file: "Late_Night_Set_0288", studio: "North Light Films", performer: "Morgan Ellis", dur: "11:03", res: "1920×1080", tags: [], rating: 2, organized: false },
+    { file: "Garden_Party_0056", studio: "Example Studio", performer: "Casey Reyes", dur: "06:34", res: "1920×1080", tags: ["Outdoor"], rating: 0, organized: false }
+  ];
+
+  // Each saved filter is its own "queue": which scenes belong to it (match),
+  // and — for the progress bar — the fixed scope it's measured against
+  // (total) so the denominator doesn't shift as scenes get organized out
+  // of `match`. Per-filter position is remembered via localStorage below.
+  var filters = [
+    {
+      id: "flt_default",
+      labelHtml: "<strong>Organized: false</strong> · <strong>Rating ≤ 2</strong>",
+      match: function (s) { return !s.organized && s.rating <= 2; },
+      total: function (s) { return s.rating <= 2; }
+    },
+    {
+      id: "flt_studio",
+      labelHtml: "<strong>Studio: Example Studio</strong>",
+      match: function (s) { return s.studio === "Example Studio"; },
+      total: function (s) { return s.studio === "Example Studio"; }
+    }
+  ];
+  var activeFilterI = 0;
+  var idx = 0;
+
+  var bindings = [
+    { key: "Q", type: "tag", value: "Amateur" },
+    { key: "W", type: "tag", value: "Outdoor" },
+    { key: "E", type: "tag", value: "POV" },
+    { key: "O", type: "organize", value: "" },
+    { key: "X", type: "delete", value: "" },
+    { key: "A", type: "prev", value: "" },
+    { key: "D", type: "next", value: "" },
+    { key: "SPACE", type: "next", value: "" }
+  ];
+
+  var typeLabel = { tag: "Tag", untag: "Remove tag", organize: "Toggle organized", delete: "Delete", rate: "Set rating", prev: "Previous", next: "Next" };
+  var typeClass = { tag: "tag", untag: "tag", organize: "gold", delete: "stop", rate: "gold", prev: "nav", next: "nav" };
+
+  var posNow = document.getElementById("posNow");
+  var posTotal = document.getElementById("posTotal");
+  var metaTitle = document.getElementById("metaTitle");
+  var metaStudio = document.getElementById("metaStudio");
+  var tagChips = document.getElementById("tagChips");
+  var badgeType = document.getElementById("badgeType");
+  var badgeRes = document.getElementById("badgeRes");
+  var organizedPill = document.getElementById("organizedPill");
+  var stars = document.getElementById("stars");
+  var dockGrid = document.getElementById("dockGrid");
+  var toast = document.getElementById("toast");
+  var toastText = document.getElementById("toastText");
+  var toastUndo = document.getElementById("toastUndo");
+  var stageEl = document.getElementById("stage");
+  var scrubber = document.getElementById("scrubber");
+  var scrubberTime = document.getElementById("scrubberTime");
+  var filterLabel = document.getElementById("filterLabel");
+  var filterBarFill = document.getElementById("filterBarFill");
+  var filterPct = document.getElementById("filterPct");
+
+  // ---- Filtered queue + per-filter "resume where I left off" ----
+
+  function visibleScenes() {
+    return scenes.filter(filters[activeFilterI].match);
+  }
+  function currentScene() {
+    return visibleScenes()[idx] || null;
+  }
+  function jumpToFile(file) {
+    var v = visibleScenes();
+    var i = v.findIndex(function (s) { return s.file === file; });
+    idx = i === -1 ? Math.min(idx, Math.max(v.length - 1, 0)) : i;
+  }
+  function progressFor(filterI) {
+    var scope = scenes.filter(filters[filterI].total);
+    var done = scope.filter(function (s) { return s.organized; }).length;
+    return { done: done, total: scope.length };
+  }
+  function saveProgress() {
+    var s = currentScene();
+    try {
+      localStorage.setItem("sift.progress." + filters[activeFilterI].id, JSON.stringify({ lastFile: s ? s.file : null }));
+      localStorage.setItem("sift.activeFilter", String(activeFilterI));
+    } catch (e) { /* localStorage unavailable — resume just won't persist */ }
+  }
+  function loadProgress(filterI) {
+    try {
+      var raw = localStorage.getItem("sift.progress." + filters[filterI].id);
+      return raw ? JSON.parse(raw) : null;
+    } catch (e) { return null; }
+  }
+  function restoreForFilter(announce) {
+    var saved = loadProgress(activeFilterI);
+    var v = visibleScenes();
+    var found = false;
+    if (saved && saved.lastFile) {
+      var i = v.findIndex(function (s) { return s.file === saved.lastFile; });
+      if (i !== -1) { idx = i; found = true; }
+    }
+    if (!found) idx = 0;
+    pendingDeleteFile = null;
+    render();
+    if (announce && found) {
+      fireToast("", "Resumed at “" + saved.lastFile + "” (last position for this filter)");
+    }
+  }
+
+  // ---- Scrubber sprite strip (stand-in for Stash's generated sprite sheet) ----
+
+  function parseDurSeconds(dur) {
+    var p = dur.split(":").map(Number);
+    return p.length === 3 ? p[0] * 3600 + p[1] * 60 + p[2] : p[0] * 60 + p[1];
+  }
+  function fmtTime(totalSec) {
+    totalSec = Math.max(0, Math.round(totalSec));
+    var m = Math.floor(totalSec / 60), sec = totalSec % 60;
+    return (m < 10 ? "0" : "") + m + ":" + (sec < 10 ? "0" : "") + sec;
+  }
+  var FRAME_COUNT = 14;
+  function renderScrubber(s) {
+    scrubber.innerHTML = "";
+    var totalSec = parseDurSeconds(s.dur);
+    for (var i = 0; i < FRAME_COUNT; i++) {
+      var t = totalSec * (i / (FRAME_COUNT - 1));
+      var tile = document.createElement("div");
+      tile.className = "sprite-frame";
+      tile.innerHTML = '<span class="tc mono">' + fmtTime(t) + "</span>";
+      (function (time, el) {
+        el.addEventListener("mouseenter", function () {
+          scrubberTime.innerHTML = "Preview <b>" + fmtTime(time) + "</b>";
+        });
+        el.addEventListener("click", function () {
+          Array.prototype.forEach.call(scrubber.children, function (c) { c.classList.remove("active"); });
+          el.classList.add("active");
+          scrubberTime.innerHTML = "Seeked to <b>" + fmtTime(time) + "</b>";
+        });
+      })(t, tile);
+      scrubber.appendChild(tile);
+    }
+  }
+  scrubber.addEventListener("mouseleave", function () { scrubberTime.textContent = "hover to preview"; });
+
+  function updateFilterUI() {
+    var f = filters[activeFilterI];
+    filterLabel.innerHTML = "Filter — " + f.labelHtml;
+    var p = progressFor(activeFilterI);
+    var pct = p.total === 0 ? 100 : Math.round((p.done / p.total) * 100);
+    filterBarFill.style.width = pct + "%";
+    filterPct.textContent = pct + "%";
+  }
+
+  function render() {
+    var v = visibleScenes();
+    if (idx >= v.length) idx = Math.max(v.length - 1, 0);
+    if (idx < 0) idx = 0;
+    var s = v[idx];
+
+    updateFilterUI();
+    posNow.textContent = v.length ? idx + 1 : 0;
+    posTotal.textContent = v.length;
+    stageEl.classList.toggle("empty", v.length === 0);
+    if (!s) { saveProgress(); return; }
+
+    metaTitle.textContent = s.file;
+    metaStudio.textContent = s.studio + " · " + s.performer;
+    badgeType.textContent = "VIDEO · " + s.dur;
+    badgeRes.textContent = s.res;
+    renderScrubber(s);
+
+    tagChips.innerHTML = "";
+    if (s.tags.length === 0) {
+      var empty = document.createElement("span");
+      empty.className = "chip"; empty.textContent = "No tags yet";
+      tagChips.appendChild(empty);
+    } else {
+      s.tags.forEach(function (t) {
+        var c = document.createElement("span");
+        c.className = "chip tag";
+        c.innerHTML = t + ' <span class="rm" title="Remove tag">✕</span>';
+        c.querySelector(".rm").addEventListener("click", function () {
+          s.tags = s.tags.filter(function (x) { return x !== t; });
+          fireToast("go", "Removed tag “" + t + "”", function () { s.tags.push(t); });
+          render();
+        });
+        tagChips.appendChild(c);
+      });
+    }
+
+    Array.prototype.forEach.call(stars.children, function (btn) {
+      btn.classList.toggle("on", Number(btn.dataset.v) <= s.rating);
+    });
+
+    organizedPill.classList.toggle("off", !s.organized);
+    organizedPill.childNodes[2].textContent = s.organized ? " Organized" : " Not organized";
+
+    saveProgress();
+  }
+
+  function fireToast(kind, text, undoFn) {
+    toast.className = "toast show" + (kind === "stop" ? " stop" : kind === "gold" ? " gold" : "") + (undoFn ? " undoable" : "");
+    toastText.textContent = text;
+    toastUndo.onclick = function () {
+      if (undoFn) undoFn();
+      toast.classList.remove("show");
+      render();
+    };
+    clearTimeout(fireToast._t);
+    fireToast._t = setTimeout(function () { toast.classList.remove("show"); }, undoFn ? 3200 : 1300);
+  }
+
+  function go(dir) {
+    var v = visibleScenes();
+    if (v.length === 0) return;
+    idx = (idx + dir + v.length) % v.length;
+    pendingDeleteFile = null;
+    render();
+  }
+
+  var pendingDeleteFile = null; // file awaiting a confirming second press of the delete key
+  var pendingDeleteTimer = null;
+
+  function applyAction(b) {
+    if (b.type === "prev") { go(-1); return; }
+    if (b.type === "next") { go(1); return; }
+    var s = currentScene();
+    if (!s) return;
+    switch (b.type) {
+      case "tag":
+        if (s.tags.indexOf(b.value) === -1) {
+          s.tags.push(b.value);
+          fireToast("go", "Tagged “" + b.value + "”", function () {
+            s.tags = s.tags.filter(function (t) { return t !== b.value; });
+          });
+        } else {
+          fireToast("go", "Already tagged “" + b.value + "”");
+        }
+        render();
+        break;
+      case "organize": {
+        var wasOrganized = s.organized, file = s.file;
+        s.organized = !s.organized;
+        fireToast(s.organized ? "go" : "", s.organized ? "Marked organized" : "Unmarked organized", function () {
+          s.organized = wasOrganized;
+          jumpToFile(file);
+        });
+        render();
+        break;
+      }
+      case "delete":
+        if (pendingDeleteFile === s.file) {
+          var removed = s, file2 = s.file;
+          clearTimeout(pendingDeleteTimer);
+          pendingDeleteFile = null;
+          scenes.splice(scenes.indexOf(removed), 1);
+          fireToast("stop", "Deleted “" + file2 + "”", function () {
+            scenes.push(removed);
+            jumpToFile(file2);
+          });
+          render();
+        } else {
+          pendingDeleteFile = s.file;
+          fireToast("stop", "Press X again to delete “" + s.file + "”");
+          clearTimeout(pendingDeleteTimer);
+          pendingDeleteTimer = setTimeout(function () { pendingDeleteFile = null; }, 2500);
+        }
+        break;
+      case "rate": {
+        var prevRating = s.rating;
+        s.rating = Number(b.value) || 0;
+        fireToast("gold", "Rated " + s.rating + " ★", function () { s.rating = prevRating; });
+        render();
+        break;
+      }
+    }
+  }
+
+  document.getElementById("changeFilter").addEventListener("click", function () {
+    activeFilterI = (activeFilterI + 1) % filters.length;
+    restoreForFilter(true);
+  });
+
+  function renderDock() {
+    dockGrid.innerHTML = "";
+    var all = bindings.concat([
+      { key: "1–5", type: "rate", value: "", display: true }
+    ]);
+    all.forEach(function (b) {
+      var el = document.createElement("div");
+      el.className = "bind " + (typeClass[b.type] || "");
+      var label = b.display ? "Set rating" : typeLabel[b.type];
+      var val = b.value ? '<span class="val">' + b.value + "</span>" : "";
+      el.innerHTML = '<span class="keycap">' + b.key + "</span>" +
+        (val ? val + '<span class="action">' + label.toLowerCase() + "</span>" : '<span class="action">' + label + "</span>");
+      dockGrid.appendChild(el);
+    });
+  }
+
+  stars.addEventListener("click", function (e) {
+    var btn = e.target.closest("button");
+    if (!btn) return;
+    applyAction({ type: "rate", value: btn.dataset.v });
+  });
+
+  document.getElementById("prevBtn").addEventListener("click", function () { go(-1); });
+  document.getElementById("nextBtn").addEventListener("click", function () { go(1); });
+
+  window.addEventListener("keydown", function (e) {
+    if (editor.classList.contains("show")) return;
+    var key = e.key === " " ? "SPACE" : e.key.toUpperCase();
+    if (key === "ARROWLEFT") { go(-1); return; }
+    if (key === "ARROWRIGHT") { go(1); return; }
+    if (key >= "1" && key <= "5") { applyAction({ type: "rate", value: key }); return; }
+    var b = bindings.filter(function (x) { return x.key === key; })[0];
+    if (b) { e.preventDefault(); applyAction(b); }
+  });
+
+  // ---- Editor ----
+  var editor = document.getElementById("editor");
+  var scrim = document.getElementById("scrim");
+  var rowsHost = document.getElementById("rowsHost");
+
+  function openEditor() {
+    rowsHost.innerHTML = "";
+    bindings.forEach(function (b, i) { rowsHost.appendChild(makeRow(b, i)); });
+    editor.classList.add("show");
+    scrim.classList.add("show");
+  }
+  function closeEditorFn() {
+    editor.classList.remove("show");
+    scrim.classList.remove("show");
+  }
+  function makeRow(b, i) {
+    var row = document.createElement("div");
+    row.className = "row";
+    var typeOptions = ["tag", "untag", "organize", "delete", "prev", "next"];
+    var options = typeOptions.map(function (t) {
+      return '<option value="' + t + '"' + (t === b.type ? " selected" : "") + ">" + typeLabel[t] + "</option>";
+    }).join("");
+    row.innerHTML =
+      '<input class="key mono" maxlength="6" value="' + b.key + '">' +
+      '<select class="type">' + options + "</select>" +
+      '<input class="value" placeholder="value (e.g. tag name)" value="' + (b.value || "") + '">' +
+      '<button class="del" title="Remove">✕</button>';
+    row.querySelector(".del").addEventListener("click", function () { row.remove(); });
+    return row;
+  }
+
+  document.getElementById("openEditor").addEventListener("click", openEditor);
+  document.getElementById("openEditor2").addEventListener("click", openEditor);
+  document.getElementById("closeEditor").addEventListener("click", closeEditorFn);
+  document.getElementById("cancelEditor").addEventListener("click", closeEditorFn);
+  scrim.addEventListener("click", closeEditorFn);
+  document.getElementById("addRow").addEventListener("click", function () {
+    rowsHost.appendChild(makeRow({ key: "", type: "tag", value: "" }));
+  });
+  document.getElementById("saveEditor").addEventListener("click", function () {
+    var rows = rowsHost.querySelectorAll(".row");
+    var next = [];
+    rows.forEach(function (row) {
+      var key = row.querySelector(".key").value.trim().toUpperCase();
+      var type = row.querySelector(".type").value;
+      var value = row.querySelector(".value").value.trim();
+      if (key) next.push({ key: key, type: type, value: value });
+    });
+    bindings = next;
+    renderDock();
+    closeEditorFn();
+    fireToast("go", "Bindings saved");
+  });
+
+  try {
+    var savedFilter = Number(localStorage.getItem("sift.activeFilter"));
+    if (!isNaN(savedFilter) && filters[savedFilter]) activeFilterI = savedFilter;
+  } catch (e) { /* localStorage unavailable — starts on the first filter */ }
+  restoreForFilter(true);
+  renderDock();
+})();
+</script>

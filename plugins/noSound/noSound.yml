@@ -1,0 +1,23 @@
+name: No Sound
+description: Finds scenes with no audio track and tags them with a 'No Sound' tag.
+version: 1.0
+url: https://github.com/stashapp/stash
+
+exec:
+  - python
+  - "{pluginDir}/noSound.py"
+interface: raw
+
+tasks:
+  - name: Tag Silent Scenes
+    description: Scans all scenes and tags those whose files have no audio codec (no sound).
+    defaultArgs:
+      mode: tag_silent
+  - name: Create Tag
+    description: Creates the 'No Sound' tag used by this plugin.
+    defaultArgs:
+      mode: create_tag
+  - name: Remove Tag
+    description: Removes the 'No Sound' tag from all scenes and deletes the tag from the system.
+    defaultArgs:
+      mode: remove_tag

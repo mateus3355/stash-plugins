@@ -1,0 +1,11 @@
+name: Markdown Details
+description: Rich-text (Quill) editor for the details field on every detail page in Stash.
+version: 1.1
+ui:
+  javascript:
+    # Quill must be loaded before the plugin script so `Quill` is available.
+    - https://cdn.jsdelivr.net/npm/quill@2.0.3/dist/quill.js
+    - markdownDetails.js
+  css:
+    - https://cdn.jsdelivr.net/npm/quill@2.0.3/dist/quill.snow.css
+    - markdownDetails.css

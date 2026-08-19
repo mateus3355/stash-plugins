@@ -1,0 +1,15 @@
+.fast-scan-btn-wrapper {
+  margin-top: 0.5rem;
+}
+
+.fast-scan-tag-btn-wrapper {
+  display: inline-block;
+  margin-left: 0.5rem;
+  vertical-align: middle;
+}
+
+.details-edit {
+  & div:has(> button){
+    margin-right: 0.5rem !important;
+  }
+}

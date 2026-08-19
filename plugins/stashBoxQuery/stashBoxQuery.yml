@@ -1,0 +1,8 @@
+name: StashDB Query Tool
+description: Adds a toolbar button that opens a standalone GraphQL query tool for stash-box instances (StashDB, PMVStash, etc). The tool can auto-load the endpoint and API key from this Stash instance's own Stash-box settings.
+version: 0.1
+ui:
+  javascript:
+    - stashBoxQuery.js
+  assets:
+    /: .

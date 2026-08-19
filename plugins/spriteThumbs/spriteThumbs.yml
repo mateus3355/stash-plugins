@@ -1,0 +1,8 @@
+name: Sprite Thumbnails
+description: Toggleable - replaces scene card thumbnails with their generated sprite sheet (scrubber contact sheet), zooming into individual frames on hover.
+version: 1.1
+ui:
+  javascript:
+    - spriteThumbs.js
+  css:
+    - spriteThumbs.css

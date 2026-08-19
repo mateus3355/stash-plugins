@@ -1,0 +1,14 @@
+name: Stash Zoom
+description: Add a zoom and pan feature to the scene viewer in Stash.
+version: 1.0
+ui:
+  javascript:
+    - stashZoom.js
+  css:
+    - stashZoom.css
+    
+settings:
+  persistent:
+    displayName: Persist Filters
+    type: STRING
+

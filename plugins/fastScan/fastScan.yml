@@ -1,0 +1,25 @@
+name: Fast Scan
+description: Adds a "Fast Scan" button to performer and tag detail pages. Determines the entity's folder by analysing its first videos, then triggers a targeted metadata scan of that folder.
+version: 1.0
+
+ui:
+  javascript:
+    - fastScan.js
+  css:
+    - fastScan.css
+
+exec:
+  - python
+  - "{pluginDir}/fastScan.py"
+interface: raw
+tasks:
+  - name: Update Content Folders
+    description: >-
+      Iterates over every performer and tag, and stores the full set of
+      unique folders backing its scenes/images/galleries as a custom field
+      ("content_folders"). The "Fast Scan" button reads this field to run
+      Generate and Auto Tag against the complete folder set. Run this after
+      large library changes, or schedule it periodically (e.g. via
+      FileMonitor's task scheduler).
+    defaultArgs:
+      mode: update_content_folders

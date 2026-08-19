@@ -1,0 +1,53 @@
+:root {
+    --x-offset: 0%;
+    --y-offset: 0%;
+    --scale: 1;
+}
+
+body:has(video-js){
+  .stash-zoom {
+      left: var(--x-offset) !important;
+      top: var(--y-offset) !important;
+      transform: scale(var(--scale), var(--scale));
+  }
+
+  .position-sticky{
+    position: sticky !important;
+    top: 0 !important;
+  }
+
+  &:has(.position-sticky){
+    .tab-pane{
+      height: 300px !important;
+      overflow: scroll;
+    }
+    .scene-tabs{
+      /* make a transparent but darker background */
+      background: rgba(0, 0, 0, 0.5);
+    }
+    .tab-pane{
+      padding: 0 32px;
+    }
+  }
+
+}
+
+.detail-header{
+  z-index: 0 !important;
+}
+
+.detail-body{
+  z-index: 1 !important;
+}
+
+.top-nav.navbar{
+  overflow: auto !important;
+}
+
+.sticky.detail-header{
+  display: none !important;
+}
+
+#video-filter-container{
+  display: none;
+}

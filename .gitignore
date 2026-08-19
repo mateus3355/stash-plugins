@@ -1,0 +1,5 @@
+# Stash writes this runtime bookkeeping file into installed plugin directories.
+# It must never be committed/shipped — it gets zipped into the plugin package by
+# build_site.sh and clobbers Stash's own tracking manifest on update.
+plugins/*/manifest
+stash.log

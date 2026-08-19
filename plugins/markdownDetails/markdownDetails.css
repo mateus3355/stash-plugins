@@ -1,0 +1,190 @@
+.sticky.detail-header-group{
+  display: none;
+}
+
+.details-edit {
+  margin-top: 1rem;
+  margin-bottom: 1rem;
+}
+
+.detail-header-image{
+  height: fit-content !important;
+}
+
+.detail-item.description{
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+} 
+
+/* ── Quill editor: dark theme to match Stash ──────────────────────────────── */
+
+.md-details-editor-container {
+  border: 1px solid #5a5a5a;
+  border-radius: 4px;
+  background: #2a2a2a;
+  color: #e0e0e0;
+}
+
+/* Bulk-edit dialogs (Edit Scenes/Performers/etc.) wrap the details textarea
+   in a Bootstrap .input-group (flex row). Force the injected toolbar and
+   editor onto their own full-width rows instead of squeezing into that row,
+   and collapse the (often empty) unset-button slot so it doesn't reserve
+   space. */
+.bulk-update-text-input.input-group {
+  flex-wrap: wrap;
+}
+.bulk-update-text-input.input-group .ql-toolbar.ql-snow,
+.bulk-update-text-input.input-group .md-details-editor-container {
+  flex: 1 1 100%;
+  width: 100%;
+}
+.bulk-update-text-input.input-group .input-group-append:empty {
+  display: none;
+}
+
+.md-details-editor-container .ql-toolbar.ql-snow {
+  border: none;
+  border-bottom: 1px solid #5a5a5a;
+  background: #222;
+  padding: 6px 8px;
+}
+
+/* Toolbar icon colours */
+.md-details-editor-container .ql-toolbar .ql-stroke {
+  stroke: #bbb;
+}
+.md-details-editor-container .ql-toolbar .ql-fill {
+  fill: #bbb;
+}
+.md-details-editor-container .ql-toolbar .ql-picker-label {
+  color: #bbb;
+}
+.md-details-editor-container .ql-toolbar .ql-picker-options {
+  background: #333;
+  border-color: #555;
+  color: #e0e0e0;
+}
+
+/* Active / hover icon colours */
+.md-details-editor-container .ql-toolbar button:hover .ql-stroke,
+.md-details-editor-container .ql-toolbar button:focus .ql-stroke,
+.md-details-editor-container .ql-toolbar button.ql-active .ql-stroke,
+.md-details-editor-container .ql-toolbar .ql-picker-label:hover .ql-stroke {
+  stroke: #fff;
+}
+.md-details-editor-container .ql-toolbar button:hover .ql-fill,
+.md-details-editor-container .ql-toolbar button:focus .ql-fill,
+.md-details-editor-container .ql-toolbar button.ql-active .ql-fill {
+  fill: #fff;
+}
+.md-details-editor-container .ql-toolbar button:hover,
+.md-details-editor-container .ql-toolbar button.ql-active {
+  color: #fff;
+}
+
+/* Editor area */
+.md-details-editor-container .ql-container.ql-snow {
+  border: none;
+  font-size: 14px;
+}
+.md-details-editor-container .ql-editor {
+  min-height: 130px;
+  max-height: 400px;
+  overflow-y: auto;
+  color: #e0e0e0;
+  padding: 10px 14px;
+}
+.md-details-editor-container .ql-editor.ql-blank::before {
+  color: #777;
+  font-style: normal;
+}
+
+/* Inline content */
+.md-details-editor-container .ql-editor p,
+.md-details-editor-container .ql-editor h1,
+.md-details-editor-container .ql-editor h2,
+.md-details-editor-container .ql-editor h3 {
+  color: #e0e0e0;
+}
+.md-details-editor-container .ql-editor a {
+  color: #66b3ff;
+}
+.md-details-editor-container .ql-editor blockquote {
+  border-left: 4px solid #555;
+  margin-left: 0;
+  padding-left: 12px;
+  color: #aaa;
+}
+.md-details-editor-container .ql-editor code,
+.md-details-editor-container .ql-editor pre {
+  background: #1a1a1a;
+  color: #e8e8e8;
+}
+.md-details-editor-container .ql-editor pre.ql-syntax {
+  background: #1a1a1a;
+  color: #e8e8e8;
+  border-radius: 4px;
+  padding: 10px 14px;
+}
+.md-details-editor-container .ql-editor ul,
+.md-details-editor-container .ql-editor ol {
+  padding-left: 1.5em;
+}
+
+/* ── View mode: rendered HTML inside detail value elements ─────────────────── */
+
+.detail-item.details .detail-item-value.details.md-details-view,
+.scene-details p.pre.md-details-view {
+  /* Allow block-level elements produced by Quill */
+  display: block;
+  white-space: normal;
+}
+
+/* Typography */
+.md-details-view p {
+  margin-bottom: 0.5em;
+}
+.md-details-view ul,
+.md-details-view ol {
+  padding-left: 1.5em;
+  margin-bottom: 0.5em;
+}
+.md-details-view a {
+  color: #66b3ff;
+}
+.md-details-view strong {
+  font-weight: bold;
+}
+.md-details-view em {
+  font-style: italic;
+}
+.md-details-view blockquote {
+  border-left: 4px solid #555;
+  margin-left: 0;
+  padding-left: 12px;
+  color: #aaa;
+}
+.md-details-view code {
+  background: #1a1a1a;
+  padding: 0 4px;
+  border-radius: 3px;
+  font-family: monospace;
+}
+.md-details-view pre {
+  background: #1a1a1a;
+  padding: 10px 14px;
+  border-radius: 4px;
+  overflow-x: auto;
+  font-family: monospace;
+}
+.md-details-view h1,
+.md-details-view h2,
+.md-details-view h3 {
+  font-weight: bold;
+  margin-bottom: 0.4em;
+}
+
+.form-group.row:has(.ql-editor){
+  padding-bottom: 42px;
+}

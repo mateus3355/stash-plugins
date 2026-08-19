@@ -1,0 +1,37 @@
+/* Sprite sheets are a grid of many frames, not a single 16:9 frame like the
+   normal screenshot, so show the whole sheet instead of cropping it. Scoped
+   to the sprite URL so scenes without a generated sprite (screenshot
+   fallback, or the feature toggled off) keep the normal cropped look. */
+img.scene-card-preview-image[src*="_sprite.jpg"] {
+  object-fit: contain;
+  background-color: #000;
+  cursor: zoom-in;
+  transition: transform 0.05s linear;
+}
+
+/* Clip the zoomed-in image to the card instead of overflowing onto
+   neighbouring cards. Harmless when no sprite is shown. */
+.scene-card-preview {
+  overflow: hidden;
+}
+
+/* Zoom into the tile under the cursor (transform-origin set by JS). Default
+   scale of 9 matches Stash's default 81-frame (9x9) sprite grid, so one
+   tile roughly fills the card - override with a plugin-level custom
+   property if a scene's sprite uses a different grid size. */
+.scene-card-preview:hover img.scene-card-preview-image[src*="_sprite.jpg"] {
+  transform: scale(var(--sprite-thumb-zoom, 9));
+  position: relative;
+  z-index: 2;
+}
+
+/* The normal hover behaviour slides the animated preview video on top of
+   the thumbnail; keep it hidden so the zoomed sprite stays visible instead. */
+.scene-card-preview:has(img.scene-card-preview-image[src*="_sprite.jpg"]):hover
+  .scene-card-preview-video {
+  top: -9999px !important;
+}
+
+.sprite-thumbs-toggle {
+  margin-left: 0.5rem;
+}
