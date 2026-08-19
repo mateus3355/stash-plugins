@@ -130,23 +130,20 @@
   }
 
   // ── Controls reorder ──────────────────────────────────────────────────────────
-  // Move .details-edit (Edit/Delete/etc. buttons) to sit above the .detail-group
+  // Visually move .details-edit (Edit/Delete/etc. buttons) above .detail-group
   // so the controls appear before the description, not after.
-
-  function repositionControls() {
-    const controls = document.querySelector(".details-edit");
-    if (!controls || controls.dataset.mdReordered) return;
-
-    const detailGroup = document.querySelector(".detail-group");
-    if (!detailGroup) return;
-
-    // Only move if controls are currently a later sibling of detail-group.
-    const parent = detailGroup.parentNode;
-    if (!parent || !parent.contains(controls)) return;
-
-    controls.dataset.mdReordered = "1";
-    parent.insertBefore(controls, detailGroup);
-  }
+  //
+  // NOTE: this used to be done with parent.insertBefore(controls, detailGroup),
+  // physically relocating the real DOM node. .details-edit is owned/rendered by
+  // React, and moving it out from under React desyncs React's fiber↔DOM
+  // bookkeeping. The next time that panel re-renders (e.g. after editing a
+  // performer/tag field and saving), React no longer recognises the relocated
+  // node and mounts a fresh .details-edit instead of reusing it — leaving the
+  // old, now-orphaned node behind with dead event handlers. Result: duplicated
+  // controls, with the top (moved) one broken and the bottom (freshly
+  // rendered) one working. Reordering visually with CSS `order` avoids ever
+  // touching the DOM tree, so React's reconciliation is never disturbed. See
+  // ".details-edit { order: -1; }" in markdownDetails.css.
 
   // ── Edit mode ─────────────────────────────────────────────────────────────────
 
@@ -238,7 +235,6 @@
       rafPending = false;
       processViewElements();
       processEditElements();
-      repositionControls();
     });
   });
 
@@ -253,7 +249,6 @@
     //   console.log("[markdownDetails] post-navigation scan");
       processViewElements();
       processEditElements();
-      repositionControls();
     }, 500);
   });
 
@@ -262,6 +257,5 @@
 //   console.log("[markdownDetails] initial scan");
   processViewElements();
   processEditElements();
-  repositionControls();
 //   console.log("[markdownDetails] ready");
 })();

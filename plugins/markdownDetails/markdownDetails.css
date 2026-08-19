@@ -7,6 +7,18 @@
   margin-bottom: 1rem;
 }
 
+/* Show .details-edit (Edit/Delete/etc. buttons) above .detail-group instead
+   of below, without moving either DOM node — see the comment above the old
+   repositionControls() in markdownDetails.js for why a JS-side DOM move
+   broke React's reconciliation and duplicated the controls on save. */
+:has(> .details-edit):has(> .detail-group) {
+  display: flex;
+  flex-direction: column;
+}
+.details-edit {
+  order: -1;
+}
+
 .detail-header-image{
   height: fit-content !important;
 }

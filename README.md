@@ -12,7 +12,7 @@ _This assumes you already know how to create plugins for Stash. If you don't, fi
 
 Now add your plugins to [plugins](/plugins) directory and they will be automatically published to the source index.
 
-Source index URL: [`https://mateus2k2.github.io/stash-plugins/main/index.yml`](https://mateus2k2.github.io/stash-plugins/main/index.yml)
+Source index URL: [`https://mateus3355.github.io/stash-plugins/main/index.yml`](https://mateus3355.github.io/stash-plugins/main/index.yml)
 
 ## Share your plugins
 
