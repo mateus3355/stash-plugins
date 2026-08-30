@@ -32,6 +32,70 @@
     textarea.dispatchEvent(new Event("input", { bubbles: true }));
   }
 
+  // ── URL autolinking ─────────────────────────────────────────────────────────
+  //
+  // Quill has no built-in "turn a pasted URL into a link" behaviour, and a URL
+  // copied from the browser address bar arrives on the clipboard as plain text
+  // only (no text/html), so Quill inserts it as unformatted text. These helpers
+  // detect bare URLs and turn them into real links — both in the editor and in
+  // the rendered view.
+
+  const URL_RE = /(?:https?:\/\/|www\.)[^\s<> ]+/gi;
+  const TRAILING_PUNCT_RE = /[.,;:!?)\]}>'"]+$/;
+
+  // Invoke cb(href, index, length) for every bare URL in `text`.
+  //   href   – value suitable for an <a href> / Quill link format (protocol added)
+  //   index  – offset of the URL text within `text`
+  //   length – length of the URL text (trailing punctuation excluded)
+  function eachUrl(text, cb) {
+    if (typeof text !== "string") return;
+    const re = new RegExp(URL_RE.source, "gi");
+    let m;
+    while ((m = re.exec(text)) !== null) {
+      let raw = m[0];
+      const trail = raw.match(TRAILING_PUNCT_RE);
+      if (trail) raw = raw.slice(0, raw.length - trail[0].length);
+      if (!raw) continue;
+      const href = /^www\./i.test(raw) ? "https://" + raw : raw;
+      cb(href, m.index, raw.length);
+    }
+  }
+
+  // View mode: replace bare-URL text nodes under `root` with <a> elements.
+  function linkifyNode(root) {
+    if (!root) return;
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+    const textNodes = [];
+    let n;
+    while ((n = walker.nextNode())) {
+      if (n.parentElement && n.parentElement.closest("a")) continue;
+      if (/(?:https?:\/\/|www\.)/i.test(n.data)) textNodes.push(n);
+    }
+    textNodes.forEach(function (textNode) {
+      const s = textNode.data;
+      const frag = document.createDocumentFragment();
+      let last = 0;
+      eachUrl(s, function (href, index, length) {
+        if (index < last) return;
+        if (index > last) {
+          frag.appendChild(document.createTextNode(s.slice(last, index)));
+        }
+        const a = document.createElement("a");
+        a.href = href;
+        a.textContent = s.substr(index, length);
+        a.target = "_blank";
+        a.rel = "noopener noreferrer";
+        frag.appendChild(a);
+        last = index + length;
+      });
+      if (last === 0) return;
+      if (last < s.length) {
+        frag.appendChild(document.createTextNode(s.slice(last)));
+      }
+      textNode.parentNode.replaceChild(frag, textNode);
+    });
+  }
+
   // ── View mode selectors ───────────────────────────────────────────────────────
   //
   //  Performer, Studio → id="details"     → .detail-item.details .detail-item-value.details
@@ -112,10 +176,12 @@
       const div = document.createElement("div");
       div.className = "md-details-view";
       div.innerHTML = raw;
+      linkifyNode(div);
       el.parentNode.insertBefore(div, el.nextSibling);
     } else {
     //   console.log("[markdownDetails] view: plain-text in", el.className, "→ no change");
       el.classList.add("md-details-plain");
+      linkifyNode(el);
     }
   }
 
@@ -184,6 +250,28 @@
       modules: { toolbar: QUILL_TOOLBAR },
     });
 
+    function syncToTextarea() {
+      const html =
+        quill.root.innerHTML === "<p><br></p>" ? "" : quill.root.innerHTML;
+    //   console.log("[markdownDetails] edit: syncing to textarea, html.length =", html.length);
+      setReactTextareaValue(textarea, html);
+    }
+
+    // Scan the editor contents and apply the `link` format to any bare URL that
+    // isn't already a link. Returns true if anything changed. Uses the "silent"
+    // source so it doesn't re-trigger text-change (no infinite loop).
+    function autolinkEditor() {
+      const sel = quill.getSelection();
+      let changed = false;
+      eachUrl(quill.getText(), function (href, index, length) {
+        if (quill.getFormat(index, length).link === href) return;
+        quill.formatText(index, length, "link", href, "silent");
+        changed = true;
+      });
+      if (changed && sel) quill.setSelection(sel.index, sel.length, "silent");
+      return changed;
+    }
+
     const initial = textarea.value ?? "";
     // console.log("[markdownDetails] edit: initial value length =", initial.length, ", isHtml =", isHtml(initial));
 
@@ -196,13 +284,28 @@
           .map(function (line) { return "<p>" + (line.trim() ? line : "<br>") + "</p>"; })
           .join("");
       }
+      // Let Quill reconcile the innerHTML into its model, then convert any bare
+      // URLs already stored in the field into real links. Sync back so the
+      // conversion is picked up when the user saves.
+      setTimeout(function () {
+        if (autolinkEditor()) syncToTextarea();
+      }, 0);
     }
 
-    quill.on("text-change", function () {
-      const html =
-        quill.root.innerHTML === "<p><br></p>" ? "" : quill.root.innerHTML;
-    //   console.log("[markdownDetails] edit: text-change → syncing to textarea, html.length =", html.length);
-      setReactTextareaValue(textarea, html);
+    let autolinkTimer;
+
+    quill.on("text-change", function (delta, oldContents, source) {
+      if (source === "user") {
+        // Defer so the pasted / typed text is fully in the document before we
+        // scan it for URLs.
+        clearTimeout(autolinkTimer);
+        autolinkTimer = setTimeout(function () {
+          autolinkEditor();
+          syncToTextarea();
+        }, 0);
+      } else {
+        syncToTextarea();
+      }
     });
 
     // console.log("[markdownDetails] edit: Quill injected ✓ for field='" + fieldName + "'");
