@@ -797,6 +797,15 @@ def start_library_monitor():
                 # ToDo: Add check to see if Docker Map path
                 stash.Log(f"Triggering Stash scan for path(s) {TmpTargetPaths} and/or {lastScanJob['DelayedProcessTargetPaths']}")
                 if lastScanJob['DelayedProcessTargetPaths'] != [] or len(TmpTargetPaths) > 1 or TmpTargetPaths[0] != SPECIAL_FILE_DIR:
+                    # Set when the scan tracked by lastScanJob is found to have actually
+                    # finished (or timed out) during this tick, together with the paths it
+                    # covered. Generate/AutoTag must never run ahead of the scan for the
+                    # same paths - they act on scanned library data (new scenes/images), so
+                    # firing before the scan lands just wastes a job cycle finding nothing
+                    # new, then has to run again once the scan does complete. Order is
+                    # always: Scan first, then Generate/Auto Tag for what it just scanned.
+                    scanJustCompleted = False
+                    completedScanPaths = []
                     if not stash.DRY_RUN:
                         if lastScanJob['id'] > -1:
                             if stashScheduler:
@@ -810,6 +819,8 @@ def start_library_monitor():
                             if lastScanJob['lastStatus'] == None or lastScanJob['lastStatus'] == "" or 'status' not in lastScanJob['lastStatus'] or lastScanJob['lastStatus']['status'] in JOB_ENDED_STATUSES or elapsedTime > MAX_SECONDS_WAIT_SCANJOB_COMPLETE:
                                 if elapsedTime > MAX_SECONDS_WAIT_SCANJOB_COMPLETE:
                                     stash.Warn(f"Timeout occurred waiting for scan job {lastScanJob['id']} to complete. Elapse-Time = {elapsedTime}; Max-Time={MAX_SECONDS_WAIT_SCANJOB_COMPLETE}; Scan-Path(s) = {lastScanJob['TargetPaths']}")
+                                scanJustCompleted = True
+                                completedScanPaths = lastScanJob['TargetPaths']
                                 lastScanJob['id'] = -1
                                 lastScanJob['timeOutDelayProcess'] = 1
                                 if len(lastScanJob['DelayedProcessTargetPaths']) > 0:
@@ -859,23 +870,23 @@ def start_library_monitor():
                                 stash.Trace(f"metadata_scan JobId = {lastScanJob['id']}, Start-Time = {lastScanJob['timeAddedToTaskQueue']}, paths = {lastScanJob['TargetPaths']}")
                     if RUN_CLEAN_AFTER_DELETE and RunCleanMetadata:
                         stash.metadata_clean(paths=TmpTargetPaths, dry_run=stash.DRY_RUN)
-                    if RUN_GENERATE_CONTENT or RUN_AUTO_TAG:
-                        # Generate/AutoTag are throttled the same way the scan job above is
-                        # (tracked via lastScanJob so only one is ever in flight): skip queuing
-                        # another one of a given type if one is already RUNNING or already
-                        # READY (queued) on the Task Queue, and fold this cycle's paths into
-                        # pendingGeneratePaths/pendingAutoTagPaths so they aren't lost - the
-                        # next call that actually goes through covers them too. Without this,
-                        # a burst of file-change events would fire a brand new
-                        # metadata_generate()/auto_tag() every debounce cycle, piling up
-                        # duplicate jobs on the Task Queue.
+                    if scanJustCompleted and completedScanPaths and (RUN_GENERATE_CONTENT or RUN_AUTO_TAG):
+                        # Only reachable once the scan covering completedScanPaths has actually
+                        # finished (see scanJustCompleted above) - never in the same tick a scan
+                        # is merely kicked off or still running. On top of that, Generate/AutoTag
+                        # are throttled the same way the scan job above is (tracked via
+                        # lastScanJob so only one is ever in flight): skip queuing another one of
+                        # a given type if one is already RUNNING or already READY (queued) on the
+                        # Task Queue, and fold this cycle's paths into
+                        # pendingGeneratePaths/pendingAutoTagPaths so they aren't lost - the next
+                        # call that actually goes through covers them too.
                         genAutoTagTaskQueue = taskQueue(stash.job_queue())
                         if RUN_GENERATE_CONTENT:
-                            for path in TmpTargetPaths:
+                            for path in completedScanPaths:
                                 if path not in pendingGeneratePaths:
                                     pendingGeneratePaths.append(path)
                             if genAutoTagTaskQueue.alreadyRunningAndQueued("Generating...."):
-                                stash.Log(f"[metadata_generate] Skipping Generate, because one is already running or queued. Path(s) {TmpTargetPaths} held for next run.")
+                                stash.Log(f"[metadata_generate] Skipping Generate, because one is already running or queued. Path(s) {completedScanPaths} held for next run.")
                             else:
                                 # metadata_generate() replaces the whole input rather than merging
                                 # with configured defaults when flags are passed, so fetch the
@@ -886,11 +897,11 @@ def start_library_monitor():
                                 stash.metadata_generate(generateFlags)
                                 pendingGeneratePaths = []
                         if RUN_AUTO_TAG:
-                            for path in TmpTargetPaths:
+                            for path in completedScanPaths:
                                 if path not in pendingAutoTagPaths:
                                     pendingAutoTagPaths.append(path)
                             if genAutoTagTaskQueue.alreadyRunningAndQueued("Auto-tagging..."):
-                                stash.Log(f"[auto_tag] Skipping Auto Tag, because one is already running or queued. Path(s) {TmpTargetPaths} held for next run.")
+                                stash.Log(f"[auto_tag] Skipping Auto Tag, because one is already running or queued. Path(s) {completedScanPaths} held for next run.")
                             else:
                                 stash.auto_tag(paths=pendingAutoTagPaths)
                                 pendingAutoTagPaths = []
