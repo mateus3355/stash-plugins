@@ -593,6 +593,16 @@ lastScanJob = {
     "lastStatus" : ""
 }
 JOB_ENDED_STATUSES = ["FINISHED", "CANCELLED"]
+# Paths that arrived while a Generate/Auto Tag job of that type was already
+# RUNNING/READY. Both are called with an explicit 'paths' scope (like Scan),
+# so - unlike simply dropping the trigger - a skipped cycle's paths are held
+# here and folded into the next call that actually goes through, the same
+# way lastScanJob['DelayedProcessTargetPaths'] does for Scan. This way a
+# change in one folder while another folder's job is in flight still gets
+# queued eventually - just coalesced into that next run - instead of being
+# silently lost.
+pendingGeneratePaths = []
+pendingAutoTagPaths = []
 
 def start_library_monitor():
     from watchdog.observers.polling import PollingObserver as Observer # PollingObserver used for network share compatibility
@@ -600,6 +610,8 @@ def start_library_monitor():
     global shouldUpdate
     global TargetPaths
     global lastScanJob
+    global pendingGeneratePaths
+    global pendingAutoTagPaths
     try:
         # Create shared memory buffer which can be used as singleton logic or to get a signal to quit task from external script
         shm_a = shared_memory.SharedMemory(name=SHAREDMEMORY_NAME, create=True, size=SHAREDMEMORY_SIZE)
@@ -848,25 +860,40 @@ def start_library_monitor():
                     if RUN_CLEAN_AFTER_DELETE and RunCleanMetadata:
                         stash.metadata_clean(paths=TmpTargetPaths, dry_run=stash.DRY_RUN)
                     if RUN_GENERATE_CONTENT or RUN_AUTO_TAG:
-                        # Unlike the scan job above (tracked via lastScanJob so only
-                        # one is ever in flight), Generate/AutoTag had no throttling at
-                        # all — a burst of file-change events would fire a brand new
-                        # metadata_generate()/auto_tag() every debounce cycle, piling
-                        # up duplicate jobs on the Task Queue. Skip queuing another one
-                        # if one of that type is already RUNNING and another is already
-                        # READY (queued); the queued job will pick up the latest state
-                        # once it starts, so nothing gets lost, just coalesced.
+                        # Generate/AutoTag are throttled the same way the scan job above is
+                        # (tracked via lastScanJob so only one is ever in flight): skip queuing
+                        # another one of a given type if one is already RUNNING or already
+                        # READY (queued) on the Task Queue, and fold this cycle's paths into
+                        # pendingGeneratePaths/pendingAutoTagPaths so they aren't lost - the
+                        # next call that actually goes through covers them too. Without this,
+                        # a burst of file-change events would fire a brand new
+                        # metadata_generate()/auto_tag() every debounce cycle, piling up
+                        # duplicate jobs on the Task Queue.
                         genAutoTagTaskQueue = taskQueue(stash.job_queue())
                         if RUN_GENERATE_CONTENT:
+                            for path in TmpTargetPaths:
+                                if path not in pendingGeneratePaths:
+                                    pendingGeneratePaths.append(path)
                             if genAutoTagTaskQueue.alreadyRunningAndQueued("Generating...."):
-                                stash.Log("[metadata_generate] Skipping Generate, because one is already running and another is queued.")
+                                stash.Log(f"[metadata_generate] Skipping Generate, because one is already running or queued. Path(s) {TmpTargetPaths} held for next run.")
                             else:
-                                stash.metadata_generate()
+                                # metadata_generate() replaces the whole input rather than merging
+                                # with configured defaults when flags are passed, so fetch the
+                                # user's configured generate defaults ourselves and add 'paths' to
+                                # scope the job to only what changed, instead of the whole library.
+                                generateFlags = dict(stash.get_configuration_defaults("generate { ...GenerateMetadataOptions }").get("generate") or {})
+                                generateFlags["paths"] = pendingGeneratePaths
+                                stash.metadata_generate(generateFlags)
+                                pendingGeneratePaths = []
                         if RUN_AUTO_TAG:
+                            for path in TmpTargetPaths:
+                                if path not in pendingAutoTagPaths:
+                                    pendingAutoTagPaths.append(path)
                             if genAutoTagTaskQueue.alreadyRunningAndQueued("Auto-tagging..."):
-                                stash.Log("[auto_tag] Skipping Auto Tag, because one is already running and another is queued.")
+                                stash.Log(f"[auto_tag] Skipping Auto Tag, because one is already running or queued. Path(s) {TmpTargetPaths} held for next run.")
                             else:
-                                stash.auto_tag(paths=TmpTargetPaths)
+                                stash.auto_tag(paths=pendingAutoTagPaths)
+                                pendingAutoTagPaths = []
                     if stash.CALLED_AS_STASH_PLUGIN and shm_buffer[0] == CONTINUE_RUNNING_SIG and FileMonitorPluginIsOnTaskQue:
                         PutPluginBackOnTaskQueAndExit = True
             else:

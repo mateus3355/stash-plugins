@@ -1113,26 +1113,24 @@ class taskQueue:
         return True
 
     def alreadyRunningAndQueued(self, description):
-        """Returns True if a job matching `description` is currently RUNNING
-        AND another one is already READY (queued) on the Task Queue.
+        """Returns True if a job matching `description` is already RUNNING
+        or already READY (queued) on the Task Queue.
         Used to stop piling up duplicate tasks (e.g. Generate, Auto Tag)
         when a burst of file-change events fires the same task repeatedly
-        before the previous run(s) finish. One running + one queued is
-        enough to guarantee the latest paths still get covered once the
-        queued job starts, so further requests can be skipped until then.
+        before the previous run(s) finish. A single job of that type
+        already in the pipeline (running or merely queued) is enough to
+        guarantee the latest paths still get covered once it runs, so
+        further requests can be skipped until it's gone from the queue.
+        Note: Despite the name (kept for backward compatibility), this
+        now triggers on RUNNING *or* READY alone, not only on both being
+        present at once - requiring both let bursts stack up multiple
+        READY jobs before the first one ever started running.
         """
-        running = 0
-        queued = 0
         if self.taskqueue == None:
             return False
         for jobDetails in self.taskqueue:
-            if jobDetails['description'] == description:
-                if jobDetails.get('status') == 'RUNNING':
-                    running += 1
-                elif jobDetails.get('status') == 'READY':
-                    queued += 1
-                if running > 0 and queued > 0:
-                    return True
+            if jobDetails['description'] == description and jobDetails.get('status') in ('RUNNING', 'READY'):
+                return True
         return False
 
     def cleanJobOnTaskQueue(self):
