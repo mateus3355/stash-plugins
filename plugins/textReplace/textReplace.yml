@@ -1,0 +1,78 @@
+name: Text Replace
+description: >-
+  Finds a string across your library's text metadata (titles, descriptions,
+  names, aliases) and replaces every occurrence. Never touches files on
+  disk - only Stash's database. Always run [Preview Replace] first to see
+  exactly what would change before running [Apply Replace].
+version: 1.0
+
+settings:
+  findText:
+    displayName: Find Text
+    description: The text to search for. Required.
+    type: STRING
+  replaceText:
+    displayName: Replace Text
+    description: The text to replace each occurrence of [Find Text] with. Leave empty to delete occurrences of [Find Text].
+    type: STRING
+  caseSensitive:
+    displayName: Case Sensitive
+    description: When enabled, only matches text with the exact same upper/lower case as [Find Text].
+    type: BOOLEAN
+  wholeWord:
+    displayName: Whole Word Only
+    description: When enabled, only replaces [Find Text] when it appears as a whole word, not as part of a larger word.
+    type: BOOLEAN
+  includeTags:
+    displayName: Include Tags
+    description: Replace in tag name, description, and aliases.
+    type: BOOLEAN
+  includePerformers:
+    displayName: Include Performers
+    description: Replace in performer name, disambiguation, details, and aliases.
+    type: BOOLEAN
+  includeStudios:
+    displayName: Include Studios
+    description: Replace in studio name, details, and aliases.
+    type: BOOLEAN
+  includeGroups:
+    displayName: Include Groups/Movies
+    description: Replace in group/movie name and synopsis.
+    type: BOOLEAN
+  includeScenes:
+    displayName: Include Scenes
+    description: Replace in scene title and details.
+    type: BOOLEAN
+  includeGalleries:
+    displayName: Include Galleries
+    description: Replace in gallery title and details.
+    type: BOOLEAN
+  includeImages:
+    displayName: Include Images
+    description: Replace in image title and details.
+    type: BOOLEAN
+  includeMarkers:
+    displayName: Include Scene Markers
+    description: Replace in scene marker titles.
+    type: BOOLEAN
+
+exec:
+  - python
+  - "{pluginDir}/textReplace.py"
+interface: raw
+
+tasks:
+  - name: Preview Replace
+    description: >-
+      Dry run - logs every field that would change (entity, field, old
+      value, new value) and writes a CSV report to the plugin folder.
+      Makes NO changes to your library. Always run this first.
+    defaultArgs:
+      mode: preview
+  - name: Apply Replace
+    description: >-
+      Performs the replace for real, using the same settings [Preview
+      Replace] just showed you. Writes the same kind of CSV report so you
+      have a record of every change made.
+    defaultArgs:
+      mode: apply
