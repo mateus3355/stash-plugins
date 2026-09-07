@@ -1,6 +1,7 @@
 # Text Replace
 
-Finds a string across your library's text metadata and replaces every occurrence.
+Finds a string across your library's text metadata and replaces every occurrence -
+**directly against Stash's SQLite database**, not through the GraphQL API.
 
 **Scope:** only Stash's database. Never renames or moves files on disk.
 
@@ -11,7 +12,7 @@ Fields covered:
 | Tag           | name, description, aliases                       |
 | Performer     | name, disambiguation, details, aliases            |
 | Studio        | name, details, aliases                            |
-| Group/Movie   | name, synopsis                                    |
+| Group/Movie   | name, synopsis (aliases, which is a single field for groups)  |
 | Scene         | title, details                                    |
 | Gallery       | title, details                                    |
 | Image         | title, details                                    |
@@ -28,21 +29,54 @@ narrow the scope.
    - **Case Sensitive** / **Whole Word Only** toggles.
    - Which entity types to include (all on by default).
 2. Run the **Preview Replace** task first (Settings -> Plugins -> Plugins -> Text
-   Replace -> [Preview Replace]). This makes **no changes** - it logs every field
-   that would change and writes a CSV report (`textReplace_preview_<timestamp>.csv`)
-   into the plugin folder so you can review it.
+   Replace -> [Preview Replace]). This opens the database **read-only** and makes
+   **no changes** - it logs every field that would change and writes a CSV report
+   (`textReplace_preview_<timestamp>.csv`) into the plugin folder so you can review it.
 3. Once you're happy with the preview, run **Apply Replace**. It performs the same
-   matching and actually updates your library, writing an `..._apply_...csv` report
-   of every change made (useful if you ever need to manually revert something).
+   matching and writes directly to the database, then writes an `..._apply_...csv`
+   report of every change made (useful if you ever need to manually revert something).
+
+## Why direct SQL instead of the GraphQL API
+
+Talking to the database directly is much faster for a library-wide operation like this
+(no per-page network round trips), but it means Stash's own Go application logic -
+validation, `updated_at` bookkeeping, plugin hooks - is bypassed entirely. This plugin
+was built by inspecting Stash's actual schema and validation code directly (not just
+the GraphQL types) to compensate for that:
+
+- Every `UPDATE` also bumps `updated_at`, matching what the API would do.
+- **Tag names have no uniqueness constraint at the database level at all** - Stash
+  enforces it purely in application code (checked against other tags' names *and*
+  aliases, case-insensitively). Studios have the same name-vs-alias check layered on
+  top of a real `UNIQUE` index. This plugin replicates both checks by hand before
+  writing a name/alias change, and skips (logging an error) anything that would
+  collide - so it won't silently create two tags with the same name. Performer names
+  are protected by a genuine `UNIQUE(name, disambiguation)` index, so a collision
+  there is simply caught as a database error and skipped the same way.
+- Tag/Performer/Studio aliases live in separate join tables, not a column on the
+  main row - handled accordingly.
+- A Group's `synopsis` in the GraphQL API is the `description` column in the
+  database; a Group's `aliases` is a single string column (unlike Tag/Performer/
+  Studio, which each support a list of aliases in their own table).
+
+**Trade-off to be aware of:** because this bypasses the API layer, anything else that
+hooks into Stash's normal update events (other plugins, hooks) won't see these
+changes as "updates" the way a GraphQL mutation would trigger them. The UI will
+reflect the changes immediately on next load either way, since Stash queries the
+database fresh per request.
 
 ## Notes
 
+- The database is opened with the same busy-timeout approach Stash itself uses, and
+  relies on Stash's database already being in WAL mode (the default) to write safely
+  while Stash's own server process is running at the same time.
+- The full set of matches for a given field is read into memory before any writes
+  happen, so a change made partway through a run can't cause rows to be skipped or
+  reprocessed - this matters in particular if Replace Text itself contains Find Text
+  (e.g. "cat" -> "category").
 - The search is applied per-field independently - if a tag's `name` and `aliases`
   both match, that shows up as two rows in the report, but is still counted as one
   changed tag in the summary line.
-- If applying a change would violate a uniqueness constraint (e.g. renaming two
-  different tags so they'd end up with the same name), that one update is skipped
-  and logged as an error; the rest of the run continues normally.
-- Only `requests` is required (no `stashapp-tools`/`watchdog`/etc. dependency) -
-  this plugin doesn't need `pip install` if you already have another Python plugin
-  installed that depends on `requests`.
+- Only `requests` is required as a pip dependency (used solely for two safe,
+  read-only lookups: your plugin settings and the database file path) - `sqlite3` is
+  part of the Python standard library.

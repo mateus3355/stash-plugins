@@ -4,30 +4,28 @@ import os
 import re
 import csv
 import time
+import sqlite3
 
 import log
 from stash_interface import StashInterface
+from stash_db import StashDB, ENTITIES
 
-stash = None
 PLUGIN_ID = "textReplace"
-PER_PAGE = 100
 
 
 def main():
-    global stash
-
     json_input = json.loads(sys.stdin.read())
     mode = json_input["args"]["mode"]  # "preview" or "apply"
     server_connection = json_input["server_connection"]
-    stash = StashInterface(server_connection)
     plugin_dir = server_connection.get("PluginDir") or os.path.dirname(os.path.abspath(__file__))
+    dry_run = mode != "apply"
 
+    stash = StashInterface(server_connection)
     settings = stash.get_plugin_settings(PLUGIN_ID)
     find_text = get_str_setting(settings, "findText")
     replace_text = get_str_setting(settings, "replaceText")
     case_sensitive = get_bool_setting(settings, "caseSensitive", True)
     whole_word = get_bool_setting(settings, "wholeWord", False)
-    dry_run = mode != "apply"
 
     if not find_text:
         msg = "Find Text setting is empty. Set it under Settings > Plugins > Plugins > Text Replace, then run again."
@@ -35,42 +33,45 @@ def main():
         print(json.dumps({"output": f"error: {msg}"}))
         return
 
-    if case_sensitive:
-        same = find_text == replace_text
-    else:
-        same = find_text.lower() == replace_text.lower()
-    if same:
+    if (find_text == replace_text) if case_sensitive else (find_text.lower() == replace_text.lower()):
         log.warning("Find Text and Replace Text are the same - nothing to do.")
         print(json.dumps({"output": "ok - nothing to do"}))
         return
 
-    entity_configs = build_entity_configs()
-    total_steps = len(entity_configs) + 1  # +1 for scene markers
-    report_rows = []
-    total_matched = 0
+    db_path = stash.get_database_path()
+    log.info(f"Opening database at {db_path} ({'read-only' if dry_run else 'read-write'}).")
+    db = StashDB(db_path, read_only=dry_run)
 
-    log.info(
-        f"{'Previewing' if dry_run else 'Applying'} replace: {find_text!r} -> {replace_text!r} "
-        f"(case_sensitive={case_sensitive}, whole_word={whole_word})"
-    )
+    try:
+        report_rows = []
+        total_matched = 0
 
-    for step, (entity_key, cfg) in enumerate(entity_configs.items()):
-        log.progress(step / total_steps)
-        if not get_bool_setting(settings, cfg["setting"], True):
-            log.debug(f"Skipping {cfg['label']} (disabled in settings).")
-            continue
-        count = process_entity_type(entity_key, cfg, find_text, replace_text, case_sensitive, whole_word, dry_run, report_rows)
-        if count:
-            log.info(f"{cfg['label']}: {count} matched.")
-        total_matched += count
+        log.info(
+            f"{'Previewing' if dry_run else 'Applying'} replace: {find_text!r} -> {replace_text!r} "
+            f"(case_sensitive={case_sensitive}, whole_word={whole_word})"
+        )
 
-    log.progress(len(entity_configs) / total_steps)
-    if get_bool_setting(settings, "includeMarkers", True):
-        count = process_scene_markers(find_text, replace_text, case_sensitive, whole_word, dry_run, report_rows)
-        if count:
-            log.info(f"Scene Marker: {count} matched.")
-        total_matched += count
-    log.progress(1)
+        entity_items = list(ENTITIES.items())
+        total_steps = len(entity_items) + 1  # +1 for scene markers
+        for step, (entity_key, cfg) in enumerate(entity_items):
+            log.progress(step / total_steps)
+            if not get_bool_setting(settings, cfg["setting"], True):
+                log.debug(f"Skipping {cfg['label']} (disabled in settings).")
+                continue
+            count = process_entity_type(db, cfg, find_text, replace_text, case_sensitive, whole_word, dry_run, report_rows)
+            if count:
+                log.info(f"{cfg['label']}: {count} matched.")
+            total_matched += count
+
+        log.progress(len(entity_items) / total_steps)
+        if get_bool_setting(settings, "includeMarkers", True):
+            count = process_scene_markers(db, find_text, replace_text, case_sensitive, whole_word, dry_run, report_rows)
+            if count:
+                log.info(f"Scene Marker: {count} matched.")
+            total_matched += count
+        log.progress(1)
+    finally:
+        db.close()
 
     report_path = write_report(plugin_dir, report_rows, dry_run)
 
@@ -101,73 +102,6 @@ def get_bool_setting(settings, key, default=True):
 
 
 # ---------------------------------------------------------------------------
-# Entity configuration - which fields on each entity type are in scope, and
-# which Stash API calls to use to find/update them. Only free-text metadata
-# fields are touched here - filenames/paths on disk are never modified.
-# ---------------------------------------------------------------------------
-
-def build_entity_configs():
-    return {
-        "tag": {
-            "label": "Tag",
-            "find_fn": stash.find_tags,
-            "update_fn": stash.update_tag,
-            "fields": ["name", "description"],
-            "alias_field": "aliases",
-            "setting": "includeTags",
-        },
-        "performer": {
-            "label": "Performer",
-            "find_fn": stash.find_performers,
-            "update_fn": stash.update_performer,
-            "fields": ["name", "disambiguation", "details"],
-            "alias_field": "aliases",
-            "setting": "includePerformers",
-        },
-        "studio": {
-            "label": "Studio",
-            "find_fn": stash.find_studios,
-            "update_fn": stash.update_studio,
-            "fields": ["name", "details"],
-            "alias_field": "aliases",
-            "setting": "includeStudios",
-        },
-        "group": {
-            "label": "Group",
-            "find_fn": stash.find_groups,
-            "update_fn": stash.update_group,
-            "fields": ["name", "synopsis"],
-            "alias_field": None,
-            "setting": "includeGroups",
-        },
-        "scene": {
-            "label": "Scene",
-            "find_fn": stash.find_scenes,
-            "update_fn": stash.update_scene,
-            "fields": ["title", "details"],
-            "alias_field": None,
-            "setting": "includeScenes",
-        },
-        "gallery": {
-            "label": "Gallery",
-            "find_fn": stash.find_galleries,
-            "update_fn": stash.update_gallery,
-            "fields": ["title", "details"],
-            "alias_field": None,
-            "setting": "includeGalleries",
-        },
-        "image": {
-            "label": "Image",
-            "find_fn": stash.find_images,
-            "update_fn": stash.update_image,
-            "fields": ["title", "details"],
-            "alias_field": None,
-            "setting": "includeImages",
-        },
-    }
-
-
-# ---------------------------------------------------------------------------
 # Matching / replacing
 # ---------------------------------------------------------------------------
 
@@ -181,110 +115,103 @@ def do_replace(text, find_text, replace_text, case_sensitive, whole_word):
     return re.sub(pattern, lambda m: replace_text, text, flags=flags)
 
 
-def collect_matches(cfg, field, find_text, page_size=PER_PAGE):
-    """Fetches every entity whose `field` matches find_text server-side
-    (a case-insensitive superset - the exact case_sensitive/whole_word check
-    happens client-side in do_replace), fully paginating BEFORE anything is
-    mutated. This matters: if we mutated while still paging through this
-    same filtered query, an updated entity could immediately drop out of
-    (or, if replace_text itself contains find_text, stay stuck in) the
-    result set and shift the page window, causing entities to be skipped
-    or re-processed. Collecting the full snapshot first avoids all of that.
+def process_entity_type(db, cfg, find_text, replace_text, case_sensitive, whole_word, dry_run, report_rows):
+    """For each in-scope field of this entity type, fetches every row whose
+    value LIKE-matches find_text (a superset - SQLite's LIKE is
+    case-insensitive for ASCII regardless of our case_sensitive setting),
+    then applies the exact case_sensitive/whole_word check client-side via
+    do_replace. The whole match set per field is fetched up front, before
+    any UPDATE runs, for the same reason the earlier GraphQL version did
+    this: mutating a row while still paginating/matching against it could
+    cause it to be skipped or (if replace_text itself contains find_text)
+    re-processed.
     """
-    results = []
-    page = 1
-    entity_filter = {field: {"modifier": "INCLUDES", "value": find_text}}
-    while True:
-        try:
-            batch = cfg["find_fn"](entity_filter, page, page_size)
-        except Exception as e:
-            log.error(f"[{cfg['label']}] Failed to query by field '{field}': {e}")
-            break
-        if not batch:
-            break
-        results.extend(batch)
-        if len(batch) < page_size:
-            break
-        page += 1
-    return results
-
-
-def apply_field_change(cfg, field, entity, find_text, replace_text, case_sensitive, whole_word, dry_run, report_rows, seen_ids):
-    is_alias = field == cfg.get("alias_field")
-    if is_alias:
-        old_value = entity.get(field) or []
-        new_value = [do_replace(a, find_text, replace_text, case_sensitive, whole_word) for a in old_value]
-        changed = new_value != old_value
-        old_display, new_display = ", ".join(old_value), ", ".join(new_value)
-    else:
-        old_value = entity.get(field)
-        new_value = do_replace(old_value, find_text, replace_text, case_sensitive, whole_word)
-        changed = new_value != old_value
-        old_display, new_display = old_value, new_value
-
-    if not changed:
-        return
-
-    seen_ids.add(entity["id"])
-    report_rows.append([cfg["label"], entity["id"], field, old_display, new_display])
-    if dry_run:
-        log.info(f"[PREVIEW][{cfg['label']}#{entity['id']}] {field}: {old_display!r} -> {new_display!r}")
-        return
-    try:
-        cfg["update_fn"]({"id": entity["id"], field: new_value})
-        log.info(f"[{cfg['label']}#{entity['id']}] {field}: {old_display!r} -> {new_display!r}")
-    except Exception as e:
-        # Most likely a uniqueness violation (e.g. two tags ending up with the
-        # same name) - log it and keep going instead of aborting the whole run.
-        log.error(f"[{cfg['label']}#{entity['id']}] Failed to update field '{field}': {e}")
-
-
-def process_entity_type(entity_key, cfg, find_text, replace_text, case_sensitive, whole_word, dry_run, report_rows):
+    label = cfg["label"]
+    table = cfg["table"]
     seen_ids = set()
-    fields_to_check = list(cfg["fields"])
-    if cfg.get("alias_field"):
-        fields_to_check.append(cfg["alias_field"])
-    for field in fields_to_check:
-        for entity in collect_matches(cfg, field, find_text):
-            apply_field_change(cfg, field, entity, find_text, replace_text, case_sensitive, whole_word, dry_run, report_rows, seen_ids)
+
+    for field in cfg["scalar_fields"]:
+        matches = db.find_scalar_matches(table, field, find_text)
+        for entity_id, old_value in matches:
+            new_value = do_replace(old_value, find_text, replace_text, case_sensitive, whole_word)
+            if new_value == old_value:
+                continue
+
+            if field == "name" and cfg["check_name_alias_uniqueness"]:
+                if db.name_conflicts(table, cfg["alias_table"], entity_id, new_value):
+                    log.error(
+                        f"[{label}#{entity_id}] Skipped renaming to {new_value!r}: "
+                        f"already in use as another {label.lower()}'s name or alias."
+                    )
+                    continue
+
+            seen_ids.add(entity_id)
+            report_rows.append([label, entity_id, field, old_value, new_value])
+            if dry_run:
+                log.info(f"[PREVIEW][{label}#{entity_id}] {field}: {old_value!r} -> {new_value!r}")
+                continue
+            try:
+                db.update_scalar_field(table, field, entity_id, new_value)
+                log.info(f"[{label}#{entity_id}] {field}: {old_value!r} -> {new_value!r}")
+            except sqlite3.IntegrityError as e:
+                # Most likely a uniqueness violation (e.g. two performers ending up
+                # with the same name+disambiguation) - log it and keep going
+                # instead of aborting the whole run.
+                log.error(f"[{label}#{entity_id}] Failed to update field '{field}': {e}")
+            except sqlite3.OperationalError as e:
+                log.error(f"[{label}#{entity_id}] Database error updating field '{field}': {e}")
+
+    if cfg["alias_table"]:
+        alias_table = cfg["alias_table"]
+        id_col = cfg["alias_id_col"]
+        matches = db.find_alias_matches(alias_table, id_col, find_text)
+        for entity_id, old_alias in matches:
+            new_alias = do_replace(old_alias, find_text, replace_text, case_sensitive, whole_word)
+            if new_alias == old_alias:
+                continue
+
+            if cfg["check_name_alias_uniqueness"]:
+                if db.alias_conflicts(table, alias_table, id_col, entity_id, new_alias):
+                    log.error(
+                        f"[{label}#{entity_id}] Skipped alias {old_alias!r} -> {new_alias!r}: "
+                        f"already in use as a {label.lower()} name or another alias."
+                    )
+                    continue
+
+            seen_ids.add(entity_id)
+            report_rows.append([label, entity_id, "aliases", old_alias, new_alias])
+            if dry_run:
+                log.info(f"[PREVIEW][{label}#{entity_id}] aliases: {old_alias!r} -> {new_alias!r}")
+                continue
+            try:
+                db.update_alias(alias_table, id_col, entity_id, old_alias, new_alias)
+                log.info(f"[{label}#{entity_id}] aliases: {old_alias!r} -> {new_alias!r}")
+            except sqlite3.IntegrityError as e:
+                log.error(f"[{label}#{entity_id}] Failed to update alias {old_alias!r}: {e}")
+            except sqlite3.OperationalError as e:
+                log.error(f"[{label}#{entity_id}] Database error updating alias {old_alias!r}: {e}")
+
     return len(seen_ids)
 
 
-def process_scene_markers(find_text, replace_text, case_sensitive, whole_word, dry_run, report_rows):
-    # Scene markers have no server-side text filter on title, so page through
-    # all of them (unfiltered - safe to paginate normally, see collect_matches
-    # docstring) and match client-side.
-    markers = []
-    page = 1
-    while True:
-        try:
-            batch = stash.find_scene_markers(page, PER_PAGE)
-        except Exception as e:
-            log.error(f"[Scene Marker] Failed to query: {e}")
-            break
-        if not batch:
-            break
-        markers.extend(batch)
-        if len(batch) < PER_PAGE:
-            break
-        page += 1
-
+def process_scene_markers(db, find_text, replace_text, case_sensitive, whole_word, dry_run, report_rows):
+    # No index worth filtering on for a one-off text search over a table
+    # that's typically small - fetch every title and match client-side.
     seen_ids = set()
-    for marker in markers:
-        old_value = marker.get("title")
+    for marker_id, old_value in db.find_all_marker_titles():
         new_value = do_replace(old_value, find_text, replace_text, case_sensitive, whole_word)
         if new_value == old_value:
             continue
-        seen_ids.add(marker["id"])
-        report_rows.append(["Scene Marker", marker["id"], "title", old_value, new_value])
+        seen_ids.add(marker_id)
+        report_rows.append(["Scene Marker", marker_id, "title", old_value, new_value])
         if dry_run:
-            log.info(f"[PREVIEW][Scene Marker#{marker['id']}] title: {old_value!r} -> {new_value!r}")
+            log.info(f"[PREVIEW][Scene Marker#{marker_id}] title: {old_value!r} -> {new_value!r}")
             continue
         try:
-            stash.update_scene_marker({"id": marker["id"], "title": new_value})
-            log.info(f"[Scene Marker#{marker['id']}] title: {old_value!r} -> {new_value!r}")
-        except Exception as e:
-            log.error(f"[Scene Marker#{marker['id']}] Failed to update title: {e}")
+            db.update_marker_title(marker_id, new_value)
+            log.info(f"[Scene Marker#{marker_id}] title: {old_value!r} -> {new_value!r}")
+        except sqlite3.OperationalError as e:
+            log.error(f"[Scene Marker#{marker_id}] Database error updating title: {e}")
     return len(seen_ids)
 
 
