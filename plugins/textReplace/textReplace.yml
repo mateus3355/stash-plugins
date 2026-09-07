@@ -25,11 +25,14 @@ settings:
     type: BOOLEAN
   includeTags:
     displayName: Include Tags
-    description: Replace in tag name, description, and aliases.
+    description: Replace in tag name, sort name, description, and aliases.
     type: BOOLEAN
   includePerformers:
     displayName: Include Performers
-    description: Replace in performer name, disambiguation, details, and aliases.
+    description: >-
+      Replace in performer name, disambiguation, details, aliases, and the
+      descriptive fields (ethnicity, country, eye color, hair color,
+      measurements, fake tits, tattoos, piercings).
     type: BOOLEAN
   includeStudios:
     displayName: Include Studios
@@ -37,23 +40,30 @@ settings:
     type: BOOLEAN
   includeGroups:
     displayName: Include Groups/Movies
-    description: Replace in group/movie name and synopsis.
+    description: Replace in group/movie name, synopsis, aliases, and director.
     type: BOOLEAN
   includeScenes:
     displayName: Include Scenes
-    description: Replace in scene title and details.
+    description: Replace in scene title, details, code, and director.
     type: BOOLEAN
   includeGalleries:
     displayName: Include Galleries
-    description: Replace in gallery title and details.
+    description: Replace in gallery title, details, code, photographer, and chapter titles.
     type: BOOLEAN
   includeImages:
     displayName: Include Images
-    description: Replace in image title and details.
+    description: Replace in image title, details, code, and photographer.
     type: BOOLEAN
   includeMarkers:
     displayName: Include Scene Markers
     description: Replace in scene marker titles.
+    type: BOOLEAN
+  includeUrls:
+    displayName: Include URLs
+    description: >-
+      Also replace inside saved URLs (performer/studio/scene/gallery/image/group).
+      Off by default - a substring replace inside a URL can break a working link
+      more easily than in a description field, so this is opt-in.
     type: BOOLEAN
 
 exec:

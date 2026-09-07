@@ -58,7 +58,7 @@ def main():
             if not get_bool_setting(settings, cfg["setting"], True):
                 log.debug(f"Skipping {cfg['label']} (disabled in settings).")
                 continue
-            count = process_entity_type(db, cfg, find_text, replace_text, case_sensitive, whole_word, dry_run, report_rows)
+            count = process_entity_type(db, cfg, settings, find_text, replace_text, case_sensitive, whole_word, dry_run, report_rows)
             if count:
                 log.info(f"{cfg['label']}: {count} matched.")
             total_matched += count
@@ -115,7 +115,7 @@ def do_replace(text, find_text, replace_text, case_sensitive, whole_word):
     return re.sub(pattern, lambda m: replace_text, text, flags=flags)
 
 
-def process_entity_type(db, cfg, find_text, replace_text, case_sensitive, whole_word, dry_run, report_rows):
+def process_entity_type(db, cfg, settings, find_text, replace_text, case_sensitive, whole_word, dry_run, report_rows):
     """For each in-scope field of this entity type, fetches every row whose
     value LIKE-matches find_text (a superset - SQLite's LIKE is
     case-insensitive for ASCII regardless of our case_sensitive setting),
@@ -138,7 +138,8 @@ def process_entity_type(db, cfg, find_text, replace_text, case_sensitive, whole_
                 continue
 
             if field == "name" and cfg["check_name_alias_uniqueness"]:
-                if db.name_conflicts(table, cfg["alias_table"], entity_id, new_value):
+                alias_table = next(c["table"] for c in cfg["child_tables"] if c["check_uniqueness"])
+                if db.name_conflicts(table, alias_table, entity_id, new_value):
                     log.error(
                         f"[{label}#{entity_id}] Skipped renaming to {new_value!r}: "
                         f"already in use as another {label.lower()}'s name or alias."
@@ -161,35 +162,37 @@ def process_entity_type(db, cfg, find_text, replace_text, case_sensitive, whole_
             except sqlite3.OperationalError as e:
                 log.error(f"[{label}#{entity_id}] Database error updating field '{field}': {e}")
 
-    if cfg["alias_table"]:
-        alias_table = cfg["alias_table"]
-        id_col = cfg["alias_id_col"]
-        matches = db.find_alias_matches(alias_table, id_col, find_text)
-        for entity_id, old_alias in matches:
-            new_alias = do_replace(old_alias, find_text, replace_text, case_sensitive, whole_word)
-            if new_alias == old_alias:
+    for child in cfg["child_tables"]:
+        if child.get("gated_by") and not get_bool_setting(settings, child["gated_by"], False):
+            continue
+        child_table, id_col, value_col = child["table"], child["id_col"], child["value_col"]
+        field_label = value_col + "s" if value_col == "alias" else value_col
+        matches = db.find_child_matches(child_table, id_col, value_col, find_text)
+        for entity_id, old_value in matches:
+            new_value = do_replace(old_value, find_text, replace_text, case_sensitive, whole_word)
+            if new_value == old_value:
                 continue
 
-            if cfg["check_name_alias_uniqueness"]:
-                if db.alias_conflicts(table, alias_table, id_col, entity_id, new_alias):
+            if child["check_uniqueness"]:
+                if db.child_value_conflicts(table, child_table, id_col, value_col, entity_id, new_value):
                     log.error(
-                        f"[{label}#{entity_id}] Skipped alias {old_alias!r} -> {new_alias!r}: "
+                        f"[{label}#{entity_id}] Skipped {field_label} {old_value!r} -> {new_value!r}: "
                         f"already in use as a {label.lower()} name or another alias."
                     )
                     continue
 
             seen_ids.add(entity_id)
-            report_rows.append([label, entity_id, "aliases", old_alias, new_alias])
+            report_rows.append([label, entity_id, field_label, old_value, new_value])
             if dry_run:
-                log.info(f"[PREVIEW][{label}#{entity_id}] aliases: {old_alias!r} -> {new_alias!r}")
+                log.info(f"[PREVIEW][{label}#{entity_id}] {field_label}: {old_value!r} -> {new_value!r}")
                 continue
             try:
-                db.update_alias(alias_table, id_col, entity_id, old_alias, new_alias)
-                log.info(f"[{label}#{entity_id}] aliases: {old_alias!r} -> {new_alias!r}")
+                db.update_child_value(child_table, id_col, value_col, entity_id, old_value, new_value)
+                log.info(f"[{label}#{entity_id}] {field_label}: {old_value!r} -> {new_value!r}")
             except sqlite3.IntegrityError as e:
-                log.error(f"[{label}#{entity_id}] Failed to update alias {old_alias!r}: {e}")
+                log.error(f"[{label}#{entity_id}] Failed to update {field_label} {old_value!r}: {e}")
             except sqlite3.OperationalError as e:
-                log.error(f"[{label}#{entity_id}] Database error updating alias {old_alias!r}: {e}")
+                log.error(f"[{label}#{entity_id}] Database error updating {field_label} {old_value!r}: {e}")
 
     return len(seen_ids)
 
