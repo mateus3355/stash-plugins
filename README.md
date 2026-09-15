@@ -42,15 +42,5 @@ https://github.com/stashapp/stash/releases/download/v0.31.1/stash-linux
 chmod +x stash-linux
 systemctl start stash
 
-FILE="/mnt/mateus/stash/1/Amadores/Omegle/omeotp/omeotpnew/shorts-flashes/heather omegle game.mp4"
-ffmpeg -fflags +genpts -hwaccel cuda -i "$FILE" \
-  -c:v h264_nvenc -preset p5 -cq 23 \
-  -c:a aac -b:a 128k \
-  -movflags +faststart \
-  fixed.mp4
-ffmpeg -i "$FILE" -c copy -map 0 -shortest fixed.mp4
-rm "$FILE"
-mv fixed.mp4 "$FILE"
-
 document.querySelectorAll(".form-check-input").forEach(e => e.click())
 document.querySelectorAll(".separator").forEach(e => e.nextElementSibling.querySelector(".form-check-input").click())
