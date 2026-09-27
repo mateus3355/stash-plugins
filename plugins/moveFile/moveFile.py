@@ -10,6 +10,7 @@ from stash_interface import StashInterface
 # WHOLE call rolls back. Chunking means one bad file only takes out its own
 # chunk instead of the entire selection.
 CHUNK_SIZE = 50
+PLUGIN_ID = "moveFile"
 
 
 def main():
@@ -61,6 +62,16 @@ def move_files(stash, args):
         log.error(f"Done with errors: {moved} moved, {failed} failed. Check the log above for which batch(es) failed.")
     else:
         log.info(f"Done: {moved} file(s) moved to '{destination_folder}'.")
+
+    if moved:
+        settings = stash.get_plugin_settings(PLUGIN_ID)
+        auto_tag_after_move = settings.get("autoTagAfterMove")
+        if auto_tag_after_move is None or auto_tag_after_move:
+            try:
+                job_id = stash.auto_tag([destination_folder])
+                log.info(f"Queued Auto Tag for '{destination_folder}' (job {job_id}).")
+            except Exception as e:
+                log.error(f"Failed to queue Auto Tag for '{destination_folder}': {e}")
 
 
 if __name__ == "__main__":

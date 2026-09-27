@@ -71,15 +71,30 @@
     });
   }
 
+  function autoTagFolder(destinationFolder) {
+    return gql(
+      'mutation MoveFileAutoTag($input: AutoTagMetadataInput!) { metadataAutoTag(input: $input) }',
+      { input: { paths: [destinationFolder] } }
+    ).then(function (data) {
+      return data.metadataAutoTag;
+    });
+  }
+
   // ---------------------------------------------------------------------
-  // Settings (Background Task Threshold) - fetched once at load and
-  // cached; falls back to the default if not loaded yet or unset.
+  // Settings (Background Task Threshold, Auto Tag After Move) - fetched
+  // once at load and cached; falls back to the defaults if not loaded
+  // yet or unset.
   // ---------------------------------------------------------------------
 
   var cachedThreshold = null;
+  var cachedAutoTagAfterMove = null;
 
   function getTaskThreshold() {
     return typeof cachedThreshold === 'number' ? cachedThreshold : DEFAULT_TASK_THRESHOLD;
+  }
+
+  function getAutoTagAfterMove() {
+    return typeof cachedAutoTagAfterMove === 'boolean' ? cachedAutoTagAfterMove : true;
   }
 
   function loadThreshold() {
@@ -91,6 +106,9 @@
         var settings = (data.configuration && data.configuration.plugins && data.configuration.plugins[PLUGIN_ID]) || {};
         if (typeof settings.taskThreshold === 'number' && settings.taskThreshold > 0) {
           cachedThreshold = settings.taskThreshold;
+        }
+        if (typeof settings.autoTagAfterMove === 'boolean') {
+          cachedAutoTagAfterMove = settings.autoTagAfterMove;
         }
       })
       .catch(function (e) {
@@ -179,7 +197,19 @@
             return { queued: true };
           })
         : moveFilesDirect(props.fileIds, destination).then(function () {
-            return { queued: false };
+            if (!getAutoTagAfterMove()) {
+              return { queued: false };
+            }
+            // Best-effort: the move itself already succeeded, so a failure
+            // to queue Auto Tag shouldn't be treated as a failure of the
+            // whole action - just log it and continue to the reload.
+            return autoTagFolder(destination)
+              .catch(function (e) {
+                console.error('[MoveFile] Failed to queue Auto Tag for ' + destination + ':', e);
+              })
+              .then(function () {
+                return { queued: false };
+              });
           });
 
       action
@@ -189,6 +219,7 @@
           if (result.queued) {
             window.alert(
               'Queued a background task to move ' + count + ' file(s) to ' + destination +
+                (getAutoTagAfterMove() ? ', followed by Auto Tag' : '') +
                 '. Check the Task Queue for progress.'
             );
           } else {

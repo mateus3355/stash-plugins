@@ -15,6 +15,12 @@ settings:
       Task Queue job instead of waiting on the request in the browser.
       Default is 20.
     type: NUMBER
+  autoTagAfterMove:
+    displayName: Auto Tag After Move
+    description: >-
+      After a successful move, queue an Auto Tag job scoped to the
+      destination folder. Default is on.
+    type: BOOLEAN
 
 ui:
   javascript:

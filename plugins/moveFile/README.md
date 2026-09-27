@@ -17,7 +17,9 @@ dialog in Settings, browsing real directories server-side rather than a plain
 text field) - then call Stash's `moveFiles` mutation, which moves the file(s) on
 disk **and** updates the database in one transaction, so there's no rescan needed
 and the DB never points at a stale path (same approach the community
-`sceneRename` plugin uses).
+`sceneRename` plugin uses). On success, it also queues an **Auto Tag** job
+scoped to the destination folder, so anything that belongs there based on
+filename matching gets tagged without a separate manual step.
 
 ## Small vs. large moves
 
@@ -40,6 +42,14 @@ which one failed.
 
 - **Background Task Threshold** (number, default 20) - moves larger than this run
   as a background task instead of a direct call.
+- **Auto Tag After Move** (boolean, default on) - after a successful move, queue
+  an Auto Tag job scoped to `paths: [destinationFolder]` (`metadataAutoTag`).
+  For a direct move this is a second GraphQL call made right after `moveFiles`
+  succeeds (a failure here is logged to the console but doesn't affect the move
+  itself, which already completed); for a background task move, `moveFile.py`
+  queues it itself once the move batch(es) finish, so it shows up as the same
+  kind of follow-up job in the Task Queue log. Either way it only fires if at
+  least one file actually moved.
 
 ## Notes / current limitations
 

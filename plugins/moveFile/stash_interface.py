@@ -2,9 +2,10 @@ import requests
 
 
 class StashInterface:
-    """Minimal GraphQL client - Move File's Python side only ever does one
-    thing (call moveFiles for a batch of file ids), so this is intentionally
-    tiny rather than a general-purpose wrapper."""
+    """Minimal GraphQL client - Move File's Python side only ever does two
+    things (call moveFiles for a batch of file ids, then optionally queue
+    an Auto Tag job for the destination), so this is intentionally tiny
+    rather than a general-purpose wrapper."""
 
     def __init__(self, conn):
         scheme = conn.get("Scheme", "http")
@@ -38,9 +39,24 @@ class StashInterface:
             raise Exception(f"GraphQL errors: {result['errors']}")
         return result.get("data", {})
 
+    def get_plugin_settings(self, plugin_id):
+        data = self._gql(
+            "query MoveFileConfiguration($ids: [ID!]) { configuration { plugins(include: $ids) } }",
+            {"ids": [plugin_id]},
+        )
+        plugins = (data.get("configuration") or {}).get("plugins") or {}
+        return plugins.get(plugin_id) or {}
+
     def move_files(self, file_ids, destination_folder):
         data = self._gql(
             "mutation MoveFileMoveFiles($input: MoveFilesInput!) { moveFiles(input: $input) }",
             {"input": {"ids": file_ids, "destination_folder": destination_folder}},
         )
         return data["moveFiles"]
+
+    def auto_tag(self, paths):
+        data = self._gql(
+            "mutation MoveFileAutoTag($input: AutoTagMetadataInput!) { metadataAutoTag(input: $input) }",
+            {"input": {"paths": paths}},
+        )
+        return data["metadataAutoTag"]
