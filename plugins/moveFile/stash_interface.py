@@ -55,8 +55,15 @@ class StashInterface:
         return data["moveFiles"]
 
     def auto_tag(self, paths):
+        # performers/studios/tags are match CRITERIA, not just scope - an
+        # omitted list means "don't match against this category" (i.e.
+        # tag nothing), not "match everything". "*" is the documented
+        # wildcard for "all", and is exactly what the native Auto Tag
+        # button always sends alongside paths - without it, this queues a
+        # job that scopes to the folder but has nothing to actually match
+        # against, so it completes having tagged nothing.
         data = self._gql(
             "mutation MoveFileAutoTag($input: AutoTagMetadataInput!) { metadataAutoTag(input: $input) }",
-            {"input": {"paths": paths}},
+            {"input": {"paths": paths, "performers": ["*"], "studios": ["*"], "tags": ["*"]}},
         )
         return data["metadataAutoTag"]

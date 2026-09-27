@@ -44,6 +44,11 @@ which one failed.
   as a background task instead of a direct call.
 - **Auto Tag After Move** (boolean, default on) - after a successful move, queue
   an Auto Tag job scoped to `paths: [destinationFolder]` (`metadataAutoTag`).
+  Also sends `performers: ["*"], studios: ["*"], tags: ["*"]` alongside `paths` -
+  those are match *criteria*, not just scope, and an omitted list means "don't
+  match this category" rather than "match everything" (confirmed against what
+  the native Auto Tag button itself always sends). Without the wildcards this
+  silently queued a job that had nothing to match against and tagged nothing.
   For a direct move this is a second GraphQL call made right after `moveFiles`
   succeeds (a failure here is logged to the console but doesn't affect the move
   itself, which already completed); for a background task move, `moveFile.py`

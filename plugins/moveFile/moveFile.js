@@ -72,9 +72,15 @@
   }
 
   function autoTagFolder(destinationFolder) {
+    // performers/studios/tags are match CRITERIA, not just scope - an
+    // omitted list means "don't match against this category" (tag
+    // nothing), not "match everything". "*" is the documented wildcard
+    // for "all", and is exactly what the native Auto Tag button always
+    // sends alongside paths - without it this queues a job that's scoped
+    // to the folder but has nothing to actually match against.
     return gql(
       'mutation MoveFileAutoTag($input: AutoTagMetadataInput!) { metadataAutoTag(input: $input) }',
-      { input: { paths: [destinationFolder] } }
+      { input: { paths: [destinationFolder], performers: ['*'], studios: ['*'], tags: ['*'] } }
     ).then(function (data) {
       return data.metadataAutoTag;
     });
