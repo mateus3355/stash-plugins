@@ -1,0 +1,28 @@
+name: Move File
+description: >-
+  Adds a "Move File" action to the scene page (moves the current scene's
+  file) and to the scene list's bulk "..." menu when scenes are selected
+  (moves all selected files at once). Small moves happen immediately;
+  large selections run in the background as a Task Queue job instead of
+  blocking the browser.
+version: 1.0
+
+settings:
+  taskThreshold:
+    displayName: Background Task Threshold
+    description: >-
+      When moving more than this many files at once, run it as a background
+      Task Queue job instead of waiting on the request in the browser.
+      Default is 20.
+    type: NUMBER
+
+ui:
+  javascript:
+    - moveFile.js
+  css:
+    - moveFile.css
+
+exec:
+  - python
+  - "{pluginDir}/moveFile.py"
+interface: raw

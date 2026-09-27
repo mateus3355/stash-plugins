@@ -2,10 +2,12 @@ import requests
 
 
 class StashInterface:
-    """Minimal GraphQL client - Text Replace only uses this for two safe,
-    read-only lookups (plugin settings, and the path to the SQLite database).
-    All the actual find/replace work goes straight to the database via
-    stash_db.py, so this file is intentionally tiny."""
+    """Minimal GraphQL client. Text Replace uses this for plugin settings,
+    and for the actual find/replace SQL itself via Stash's own querySQL /
+    execSQL mutations - which run through the server's live database
+    connection, so there's no separate file to locate or open, and no
+    WAL/busy-timeout handling to do ourselves (the server already handles
+    that for its own connection)."""
 
     def __init__(self, conn):
         scheme = conn.get("Scheme", "http")
@@ -47,6 +49,25 @@ class StashInterface:
         plugins = (data.get("configuration") or {}).get("plugins") or {}
         return plugins.get(plugin_id) or {}
 
-    def get_database_path(self):
-        data = self._gql("query DatabasePath { configuration { general { databasePath } } }")
-        return data["configuration"]["general"]["databasePath"]
+    def query_sql(self, sql, args=None):
+        """Runs a SELECT via Stash's querySQL mutation. Returns a list of
+        dicts (column name -> value) - one per row."""
+        data = self._gql(
+            "mutation TextReplaceQuerySQL($sql: String!, $args: [Any]) { "
+            "querySQL(sql: $sql, args: $args) { columns rows } }",
+            {"sql": sql, "args": args or []},
+        )
+        result = data["querySQL"]
+        columns = result["columns"]
+        return [dict(zip(columns, row)) for row in result["rows"]]
+
+    def exec_sql(self, sql, args=None):
+        """Runs an INSERT/UPDATE/DELETE via Stash's execSQL mutation -
+        DANGEROUS, per Stash's own schema comment: arbitrary SQL executed
+        directly against the live database. Returns rows_affected."""
+        data = self._gql(
+            "mutation TextReplaceExecSQL($sql: String!, $args: [Any]) { "
+            "execSQL(sql: $sql, args: $args) { rows_affected } }",
+            {"sql": sql, "args": args or []},
+        )
+        return data["execSQL"]["rows_affected"]

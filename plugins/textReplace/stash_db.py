@@ -1,5 +1,3 @@
-import sqlite3
-
 # ---------------------------------------------------------------------------
 # Schema reference (verified directly against a real, migrated Stash SQLite
 # database - not guessed from GraphQL). This module is deliberately explicit
@@ -142,55 +140,61 @@ def like_pattern(find_text):
 
 
 class StashDB:
-    def __init__(self, path, read_only):
+    """Runs all SQL through Stash's own querySQL/execSQL GraphQL mutations
+    (see stash_interface.py) instead of opening a separate connection to
+    the database file. That means every statement goes through the same
+    live connection and transaction handling the rest of the server
+    already uses - no database file to locate, no WAL/busy-timeout
+    juggling of our own."""
+
+    def __init__(self, stash, read_only):
+        self.stash = stash
         self.read_only = read_only
-        if read_only:
-            self.conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
-        else:
-            self.conn = sqlite3.connect(path)
-        # Stash itself uses a 5s busy timeout for the same reason: this
-        # connection and Stash's own live server connection(s) both write
-        # to this file concurrently. WAL mode (already enabled by Stash)
-        # is what makes that workable; the busy timeout covers the rest.
-        self.conn.execute("PRAGMA busy_timeout = 8000")
-        self.conn.row_factory = sqlite3.Row
 
     def close(self):
-        self.conn.close()
+        pass  # nothing to close - stash's own connection handles that.
+
+    def _query(self, sql, args):
+        return self.stash.query_sql(sql, args)
+
+    def _exec(self, sql, args):
+        if self.read_only:
+            # Defense in depth: dry runs should never reach this. If they
+            # do (a coding mistake), fail loudly rather than write anyway.
+            raise RuntimeError(f"Refusing to exec SQL during a read-only (preview) run: {sql}")
+        return self.stash.exec_sql(sql, args)
 
     # -- scalar fields (a single column on the entity's own table) --------
 
     def find_scalar_matches(self, table, field, find_text):
-        rows = self.conn.execute(
+        rows = self._query(
             f"SELECT id, {field} AS value FROM {table} WHERE {field} LIKE ? ESCAPE '\\'",
-            (like_pattern(find_text),),
-        ).fetchall()
+            [like_pattern(find_text)],
+        )
         return [(row["id"], row["value"]) for row in rows]
 
     def update_scalar_field(self, table, field, entity_id, new_value):
-        self.conn.execute(
+        self._exec(
             f"UPDATE {table} SET {field} = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-            (new_value, entity_id),
+            [new_value, entity_id],
         )
-        self.conn.commit()
 
     # -- child text tables: aliases (tag_aliases, ...) and urls (scene_urls, ...) --
     # Both shapes are (entity_id, text_value, ...) with the text value part
     # of the primary key, so they share the same find/update logic.
 
     def find_child_matches(self, table, id_col, value_col, find_text):
-        rows = self.conn.execute(
+        rows = self._query(
             f"SELECT {id_col} AS entity_id, {value_col} AS value FROM {table} WHERE {value_col} LIKE ? ESCAPE '\\'",
-            (like_pattern(find_text),),
-        ).fetchall()
+            [like_pattern(find_text)],
+        )
         return [(row["entity_id"], row["value"]) for row in rows]
 
     def update_child_value(self, table, id_col, value_col, entity_id, old_value, new_value):
-        self.conn.execute(
+        self._exec(
             f"UPDATE {table} SET {value_col} = ? WHERE {id_col} = ? AND {value_col} = ?",
-            (new_value, entity_id, old_value),
+            [new_value, entity_id, old_value],
         )
-        self.conn.commit()
 
     # -- Tag/Studio name<->alias uniqueness (see module docstring) --------
 
@@ -199,44 +203,43 @@ class StashDB:
         a DIFFERENT row in `table`, or the alias of ANY row in
         `alias_table` (including this one, mirroring EnsureTagNameUnique's
         symmetric name<->alias check)."""
-        row = self.conn.execute(
+        rows = self._query(
             f"SELECT id FROM {table} WHERE id != ? AND name = ? COLLATE NOCASE",
-            (entity_id, candidate_name),
-        ).fetchone()
-        if row:
+            [entity_id, candidate_name],
+        )
+        if rows:
             return True
-        row = self.conn.execute(
+        rows = self._query(
             f"SELECT 1 FROM {alias_table} WHERE alias = ? COLLATE NOCASE",
-            (candidate_name,),
-        ).fetchone()
-        return row is not None
+            [candidate_name],
+        )
+        return len(rows) > 0
 
     def child_value_conflicts(self, table, child_table, id_col, value_col, entity_id, candidate_value):
         """True if candidate_value (case-insensitive) is already some row's
         name in `table`, or already this same value in a DIFFERENT entity's
         row of `child_table`. Only meaningful for check_uniqueness=True
         child tables (i.e. Tag/Studio aliases)."""
-        row = self.conn.execute(
+        rows = self._query(
             f"SELECT 1 FROM {table} WHERE name = ? COLLATE NOCASE",
-            (candidate_value,),
-        ).fetchone()
-        if row:
+            [candidate_value],
+        )
+        if rows:
             return True
-        row = self.conn.execute(
+        rows = self._query(
             f"SELECT 1 FROM {child_table} WHERE {value_col} = ? COLLATE NOCASE AND {id_col} != ?",
-            (candidate_value, entity_id),
-        ).fetchone()
-        return row is not None
+            [candidate_value, entity_id],
+        )
+        return len(rows) > 0
 
     # -- Scene markers (own table, no aliases) -----------------------------
 
     def find_all_marker_titles(self):
-        rows = self.conn.execute(f"SELECT id, title AS value FROM {MARKER_TABLE}").fetchall()
+        rows = self._query(f"SELECT id, title AS value FROM {MARKER_TABLE}", [])
         return [(row["id"], row["value"]) for row in rows]
 
     def update_marker_title(self, marker_id, new_title):
-        self.conn.execute(
+        self._exec(
             f"UPDATE {MARKER_TABLE} SET title = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-            (new_title, marker_id),
+            [new_title, marker_id],
         )
-        self.conn.commit()

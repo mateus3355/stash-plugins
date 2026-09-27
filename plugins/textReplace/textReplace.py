@@ -4,7 +4,6 @@ import os
 import re
 import csv
 import time
-import sqlite3
 
 import log
 from stash_interface import StashInterface
@@ -38,9 +37,8 @@ def main():
         print(json.dumps({"output": "ok - nothing to do"}))
         return
 
-    db_path = stash.get_database_path()
-    log.info(f"Opening database at {db_path} ({'read-only' if dry_run else 'read-write'}).")
-    db = StashDB(db_path, read_only=dry_run)
+    log.info(f"Running {'in preview mode (read-only)' if dry_run else 'with writes enabled'} via Stash's querySQL/execSQL.")
+    db = StashDB(stash, read_only=dry_run)
 
     try:
         report_rows = []
@@ -154,13 +152,11 @@ def process_entity_type(db, cfg, settings, find_text, replace_text, case_sensiti
             try:
                 db.update_scalar_field(table, field, entity_id, new_value)
                 log.info(f"[{label}#{entity_id}] {field}: {old_value!r} -> {new_value!r}")
-            except sqlite3.IntegrityError as e:
+            except Exception as e:
                 # Most likely a uniqueness violation (e.g. two performers ending up
                 # with the same name+disambiguation) - log it and keep going
                 # instead of aborting the whole run.
                 log.error(f"[{label}#{entity_id}] Failed to update field '{field}': {e}")
-            except sqlite3.OperationalError as e:
-                log.error(f"[{label}#{entity_id}] Database error updating field '{field}': {e}")
 
     for child in cfg["child_tables"]:
         if child.get("gated_by") and not get_bool_setting(settings, child["gated_by"], False):
@@ -189,10 +185,8 @@ def process_entity_type(db, cfg, settings, find_text, replace_text, case_sensiti
             try:
                 db.update_child_value(child_table, id_col, value_col, entity_id, old_value, new_value)
                 log.info(f"[{label}#{entity_id}] {field_label}: {old_value!r} -> {new_value!r}")
-            except sqlite3.IntegrityError as e:
+            except Exception as e:
                 log.error(f"[{label}#{entity_id}] Failed to update {field_label} {old_value!r}: {e}")
-            except sqlite3.OperationalError as e:
-                log.error(f"[{label}#{entity_id}] Database error updating {field_label} {old_value!r}: {e}")
 
     return len(seen_ids)
 
@@ -213,8 +207,8 @@ def process_scene_markers(db, find_text, replace_text, case_sensitive, whole_wor
         try:
             db.update_marker_title(marker_id, new_value)
             log.info(f"[Scene Marker#{marker_id}] title: {old_value!r} -> {new_value!r}")
-        except sqlite3.OperationalError as e:
-            log.error(f"[Scene Marker#{marker_id}] Database error updating title: {e}")
+        except Exception as e:
+            log.error(f"[Scene Marker#{marker_id}] Failed to update title: {e}")
     return len(seen_ids)
 
 

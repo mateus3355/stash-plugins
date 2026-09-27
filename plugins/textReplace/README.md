@@ -66,13 +66,13 @@ per-entity toggles.
    matching and writes directly to the database, then writes an `..._apply_...csv`
    report of every change made (useful if you ever need to manually revert something).
 
-## Why direct SQL instead of the GraphQL API
+## Why direct SQL instead of the normal GraphQL API
 
-Talking to the database directly is much faster for a library-wide operation like this
-(no per-page network round trips), but it means Stash's own Go application logic -
-validation, `updated_at` bookkeeping, plugin hooks - is bypassed entirely. This plugin
-was built by inspecting Stash's actual schema and validation code directly (not just
-the GraphQL types) to compensate for that:
+Running SQL directly is much faster for a library-wide operation like this than paging
+through individual entity queries/mutations, but it means Stash's own Go application
+logic - validation, `updated_at` bookkeeping, plugin hooks - is bypassed entirely. This
+plugin was built by inspecting Stash's actual schema and validation code directly (not
+just the GraphQL types) to compensate for that:
 
 - Every `UPDATE` also bumps `updated_at`, matching what the API would do.
 - **Tag names have no uniqueness constraint at the database level at all** - Stash
@@ -97,9 +97,12 @@ database fresh per request.
 
 ## Notes
 
-- The database is opened with the same busy-timeout approach Stash itself uses, and
-  relies on Stash's database already being in WAL mode (the default) to write safely
-  while Stash's own server process is running at the same time.
+- All SQL runs through Stash's own `querySQL`/`execSQL` GraphQL mutations (the same
+  ones used internally for advanced migrations) rather than opening a separate
+  connection to the database file - so it's the server's own live connection doing
+  the work, with no file path to locate and no locking/concurrency handling of our
+  own to get right. Preview mode never calls `execSQL` at all (only `querySQL`), and
+  the plugin also refuses to attempt one if that guard is somehow bypassed.
 - The full set of matches for a given field is read into memory before any writes
   happen, so a change made partway through a run can't cause rows to be skipped or
   reprocessed - this matters in particular if Replace Text itself contains Find Text
