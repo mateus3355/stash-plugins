@@ -9,6 +9,8 @@
   var Button = Bootstrap.Button;
   var Form = Bootstrap.Form;
   var Alert = Bootstrap.Alert;
+  var ApolloProvider = PluginApi.libraries.Apollo.ApolloProvider;
+  var getApolloClient = PluginApi.utils.StashService.getClient;
 
   var PLUGIN_ID = 'moveFile';
   var DEFAULT_TASK_THRESHOLD = 20;
@@ -34,15 +36,6 @@
         }
         return res.data;
       });
-  }
-
-  function findSceneFiles(sceneId) {
-    return gql(
-      'query MoveFileFindScene($id: ID!) { findScene(id: $id) { id files { id path } } }',
-      { id: sceneId }
-    ).then(function (data) {
-      return (data.findScene && data.findScene.files) || [];
-    });
   }
 
   function findScenesFiles(sceneIds) {
@@ -104,6 +97,25 @@
       });
   }
   loadThreshold();
+
+  // Library root paths, shown as the starting suggestions in the folder
+  // browser (matching how Stash's own DirectorySelectionDialog seeds it
+  // with configuration.general.stashes).
+  var cachedLibraryPaths = [];
+
+  function loadLibraryPaths() {
+    gql('query MoveFileLibraryPaths { configuration { general { stashes { path } } } }')
+      .then(function (data) {
+        var stashes = (data.configuration && data.configuration.general && data.configuration.general.stashes) || [];
+        cachedLibraryPaths = stashes.map(function (s) {
+          return s.path;
+        });
+      })
+      .catch(function (e) {
+        console.error('[MoveFile] Failed to load library paths:', e);
+      });
+  }
+  loadLibraryPaths();
 
   // ---------------------------------------------------------------------
   // Path helper - Stash runs on Windows too, so don't assume '/'.
@@ -190,6 +202,37 @@
         });
     }
 
+    // Reuse Stash's own folder browser (the same component behind the
+    // native "Select folders" dialog) when it's available, rather than a
+    // plain text field - it browses real directories server-side via
+    // useDirectory(), instead of the user having to type an exact path.
+    // It's a registered PatchComponent, but only once something in the
+    // main app has actually loaded that module, so fall back to a plain
+    // input if it isn't there yet.
+    function renderFolderInput() {
+      var FolderSelect = PluginApi.components.FolderSelect;
+      if (!FolderSelect) {
+        return React.createElement(Form.Control, {
+          type: 'text',
+          value: folder,
+          autoFocus: true,
+          placeholder: '/path/to/destination',
+          disabled: busy,
+          onChange: function (e) {
+            setFolder(e.target.value);
+          },
+          onKeyDown: function (e) {
+            if (e.key === 'Enter') handleMove();
+          },
+        });
+      }
+      return React.createElement(FolderSelect, {
+        currentDirectory: folder,
+        onChangeDirectory: setFolder,
+        defaultDirectories: cachedLibraryPaths,
+      });
+    }
+
     return React.createElement(
       Modal,
       { show: props.show, onHide: props.onClose },
@@ -206,19 +249,7 @@
           Form.Group,
           null,
           React.createElement(Form.Label, null, 'Destination folder'),
-          React.createElement(Form.Control, {
-            type: 'text',
-            value: folder,
-            autoFocus: true,
-            placeholder: '/path/to/destination',
-            disabled: busy,
-            onChange: function (e) {
-              setFolder(e.target.value);
-            },
-            onKeyDown: function (e) {
-              if (e.key === 'Enter') handleMove();
-            },
-          })
+          renderFolderInput()
         ),
         usesTask
           ? React.createElement(
@@ -256,15 +287,26 @@
 
     function render(show) {
       ReactDOM.render(
-        React.createElement(MoveFileModal, {
-          show: show,
-          fileIds: fileIds,
-          initialFolder: initialFolder,
-          itemLabel: itemLabel,
-          onClose: function () {
-            render(false);
-          },
-        }),
+        // FolderSelect's directory browsing runs an Apollo query
+        // (useDirectory), and this component tree is mounted via its own
+        // ReactDOM.render call into a detached container - a separate
+        // React root, outside the main app's <ApolloProvider>. Wrapping
+        // it here with the same client instance the app itself uses
+        // (PluginApi.utils.StashService.getClient()) gives it that
+        // context back.
+        React.createElement(
+          ApolloProvider,
+          { client: getApolloClient() },
+          React.createElement(MoveFileModal, {
+            show: show,
+            fileIds: fileIds,
+            initialFolder: initialFolder,
+            itemLabel: itemLabel,
+            onClose: function () {
+              render(false);
+            },
+          })
+        ),
         modalContainer
       );
     }
@@ -272,46 +314,37 @@
   }
 
   // ---------------------------------------------------------------------
-  // Single-scene entry point: a "Move File" button next to the existing
-  // "reveal in file manager" button in the scene's file info panel - the
-  // most stable selector available there (not locale-dependent, unlike
-  // the "Path" field's translated label).
+  // Single-scene entry point: a "Move File" button appended to the file
+  // info panel. SceneFileInfoPanel is a real PatchComponent, and its
+  // props already carry the scene's file id/path directly - no DOM
+  // scraping, no extra GraphQL round trip, and (unlike anchoring to the
+  // "reveal in file manager" button) it works regardless of whether
+  // Stash considers this a localhost session: RevealInFilesystemButton
+  // renders nothing at all on a remote/reverse-proxied instance, since
+  // "open in this machine's file manager" is meaningless there - but
+  // moving the file server-side is still perfectly valid, so it
+  // shouldn't be tied to that check.
   // ---------------------------------------------------------------------
 
-  var REVEAL_BUTTON_SELECTOR = '.reveal-in-filesystem-button';
+  PluginApi.patch.after('SceneFileInfoPanel', function (props, result) {
+    var scene = props && props.scene;
+    var file = scene && scene.files && scene.files[0];
+    if (!file) return result;
 
-  function decorateRevealButton(btn) {
-    if (btn.dataset.movefileDecorated) return;
-    btn.dataset.movefileDecorated = '1';
-
-    var moveBtn = document.createElement('button');
-    moveBtn.type = 'button';
-    moveBtn.className = 'btn btn-secondary minimal movefile-button';
-    moveBtn.title = 'Move File';
-    moveBtn.textContent = 'Move';
-    moveBtn.addEventListener('click', function (e) {
-      e.preventDefault();
-      e.stopPropagation();
-      var match = window.location.pathname.match(/\/scenes\/(\d+)/);
-      if (!match) return;
-      var sceneId = match[1];
-      findSceneFiles(sceneId)
-        .then(function (files) {
-          if (!files.length) {
-            window.alert('No files found for this scene.');
-            return;
-          }
-          var file = files[0];
+    var button = React.createElement(
+      Button,
+      {
+        className: 'minimal movefile-button',
+        title: 'Move File',
+        onClick: function () {
           openMoveModal([file.id], parentFolderOf(file.path), '1 file');
-        })
-        .catch(function (err) {
-          window.alert('Failed to load scene file info: ' + err.message);
-        });
-    });
-    if (btn.parentNode) {
-      btn.parentNode.insertBefore(moveBtn, btn.nextSibling);
-    }
-  }
+        },
+      },
+      'Move File'
+    );
+
+    return React.createElement(React.Fragment, null, result, button);
+  });
 
   // ---------------------------------------------------------------------
   // Bulk entry point: a "Move Files…" item in the scene list's "..."
@@ -400,11 +433,6 @@
         var node = addedNodes[j];
         if (node.nodeType !== Node.ELEMENT_NODE) continue;
 
-        var revealBtn = node.matches && node.matches(REVEAL_BUTTON_SELECTOR)
-          ? node
-          : node.querySelector && node.querySelector(REVEAL_BUTTON_SELECTOR);
-        if (revealBtn) decorateRevealButton(revealBtn);
-
         var opsMenu = node.matches && node.matches(OPERATIONS_MENU_SELECTOR)
           ? node
           : node.querySelector && node.querySelector(OPERATIONS_MENU_SELECTOR);
@@ -416,6 +444,5 @@
   var observer = new MutationObserver(handleMutations);
   observer.observe(document.body, { childList: true, subtree: true });
 
-  document.querySelectorAll(REVEAL_BUTTON_SELECTOR).forEach(decorateRevealButton);
   syncAllOperationsDropdowns();
 })();

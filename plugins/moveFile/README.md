@@ -4,17 +4,20 @@ A frontend for Stash's `moveFiles` mutation, which has existed in the backend si
 [#3557](https://github.com/stashapp/stash/pull/3557) but has no UI of its own in
 core Stash. Adds:
 
-- A **Move** button next to the existing "reveal in file manager" button on a scene's
-  file info panel, for moving that one scene's file (parallels how `RenameFile` lets
-  you rename the current scene's file from the Edit tab).
+- A **Move File** button on a scene's File Info tab, for moving that one scene's
+  file (parallels how `RenameFile` lets you rename the current scene's file from
+  the Edit tab).
 - A **Move N Files…** item in the scene list's `...` bulk-operations dropdown,
   shown whenever one or more scenes are selected - for moving every selected
   scene's file(s) to the same destination folder in one go.
 
-Both open the same small dialog asking for a destination folder, then call Stash's
-`moveFiles` mutation - which moves the file(s) on disk **and** updates the database
-in one transaction, so there's no rescan needed and the DB never points at a stale
-path (same approach the community `sceneRename` plugin uses).
+Both open the same small dialog asking for a destination folder - using Stash's
+own folder browser component (the same one behind the native "Select folders"
+dialog in Settings, browsing real directories server-side rather than a plain
+text field) - then call Stash's `moveFiles` mutation, which moves the file(s) on
+disk **and** updates the database in one transaction, so there's no rescan needed
+and the DB never points at a stale path (same approach the community
+`sceneRename` plugin uses).
 
 ## Small vs. large moves
 
@@ -43,15 +46,23 @@ which one failed.
 - Scoped to **scenes** only for now - the bulk dropdown item targets the main
   Scenes list specifically. The same approach could be extended to Images/
   Galleries if wanted.
-- The destination folder is a plain text field (an absolute path within one of
-  your library paths - `moveFiles` itself validates this and the dialog will show
-  the error if it doesn't match). There's no folder browser/autocomplete yet.
+- The destination folder field is Stash's own `FolderSelect` component when it's
+  available (browses real directories server-side, seeded with your configured
+  library paths as starting suggestions) - it falls back to a plain text field
+  only if that component hasn't been loaded by the main app yet in this session.
+  Either way, `moveFiles` itself validates the path is within a library path and
+  the dialog shows the error if it isn't.
 - For a single scene, the current folder is pre-filled as the default so an
   in-place rename-of-folder-only isn't necessary just to see where the file
   currently lives.
-- The single-scene button is anchored to the `.reveal-in-filesystem-button`
-  element (a stable, locale-independent selector) rather than the "Path" field's
-  label, which is translated and would break in non-English locales.
+- The single-scene button hooks `SceneFileInfoPanel` directly via
+  `PluginApi.patch.after(...)` - it's a real `PatchComponent`, and its props
+  already carry the scene's file id/path, so no DOM scraping or extra GraphQL
+  query is needed. (An earlier version anchored to the "reveal in file manager"
+  button instead, which turned out to be a bad choice: that button renders
+  nothing at all unless Stash detects it's being accessed via `localhost` -
+  meaning it - and Move File's button - would silently vanish on any
+  remote/reverse-proxied setup.)
 - The bulk dropdown item is injected as a plain DOM node (not a real
   react-bootstrap `Dropdown.Item`), because the scene list's operations menu has
   no official plugin extension point - `otherOperations` is built inline inside
@@ -59,3 +70,8 @@ which one failed.
   selection itself *is* exposed as a prop on the `SceneList` component though, so
   that part is captured cleanly via `PluginApi.patch.before("SceneList", ...)`
   rather than scraped from checkboxes in the DOM.
+- `FolderSelect` runs its directory browsing through an Apollo query, and this
+  plugin's modal is mounted into its own detached `ReactDOM.render` root
+  (outside the main app's `<ApolloProvider>`), so it's wrapped in its own
+  `ApolloProvider` using the same client instance the app itself uses
+  (`PluginApi.utils.StashService.getClient()`).
