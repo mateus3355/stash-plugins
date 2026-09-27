@@ -11,6 +11,7 @@
   var Alert = Bootstrap.Alert;
   var ApolloProvider = PluginApi.libraries.Apollo.ApolloProvider;
   var getApolloClient = PluginApi.utils.StashService.getClient;
+  var IntlProvider = PluginApi.libraries.Intl.IntlProvider;
 
   var PLUGIN_ID = 'moveFile';
   var DEFAULT_TASK_THRESHOLD = 20;
@@ -288,24 +289,29 @@
     function render(show) {
       ReactDOM.render(
         // FolderSelect's directory browsing runs an Apollo query
-        // (useDirectory), and this component tree is mounted via its own
-        // ReactDOM.render call into a detached container - a separate
-        // React root, outside the main app's <ApolloProvider>. Wrapping
-        // it here with the same client instance the app itself uses
-        // (PluginApi.utils.StashService.getClient()) gives it that
-        // context back.
+        // (useDirectory) and calls useIntl() for its labels, and this
+        // component tree is mounted via its own ReactDOM.render call into
+        // a detached container - a separate React root, outside the main
+        // app's <ApolloProvider> and <IntlProvider>. Wrapping it here
+        // (Apollo with the app's own client instance; Intl with a bare
+        // English-only provider, since we don't have access to the app's
+        // actual loaded message catalog) gives it both contexts back.
         React.createElement(
           ApolloProvider,
           { client: getApolloClient() },
-          React.createElement(MoveFileModal, {
-            show: show,
-            fileIds: fileIds,
-            initialFolder: initialFolder,
-            itemLabel: itemLabel,
-            onClose: function () {
-              render(false);
-            },
-          })
+          React.createElement(
+            IntlProvider,
+            { locale: 'en', defaultLocale: 'en', messages: {}, onError: function () {} },
+            React.createElement(MoveFileModal, {
+              show: show,
+              fileIds: fileIds,
+              initialFolder: initialFolder,
+              itemLabel: itemLabel,
+              onClose: function () {
+                render(false);
+              },
+            })
+          )
         ),
         modalContainer
       );
@@ -326,7 +332,14 @@
   // shouldn't be tied to that check.
   // ---------------------------------------------------------------------
 
-  PluginApi.patch.after('SceneFileInfoPanel', function (props, result) {
+  // NOTE: React always calls function components with a second "legacy
+  // context" argument (an empty {} for components that don't use legacy
+  // context, which this one doesn't) - the patch system forwards the
+  // ORIGINAL call arguments before appending the render result, so an
+  // `after` callback here actually receives (props, legacyContext,
+  // result), not (props, result). Confirmed against how the community
+  // tagCopyPaste plugin does the same thing.
+  PluginApi.patch.after('SceneFileInfoPanel', function (props, _legacyContext, result) {
     var scene = props && props.scene;
     var file = scene && scene.files && scene.files[0];
     if (!file) return result;
