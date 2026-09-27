@@ -276,9 +276,22 @@
                 '. Check the Task Queue for progress.'
             );
           } else {
-            // moveFiles updates the database in the same transaction, so a
-            // reload is enough to reflect it - no separate rescan needed.
-            window.location.reload();
+            // moveFiles updates the database in the same transaction, so
+            // the data itself is already correct - but we called it via a
+            // raw fetch, not through the app's own Apollo Client, so
+            // Apollo's cache has no idea anything changed and every
+            // mounted query (this scene, the scene list, ...) would keep
+            // showing stale data otherwise. Ask that same client to
+            // refetch its active queries in place, rather than a full
+            // page reload - same freshness, without the jarring flash or
+            // losing scroll position/filters. Fall back to a hard reload
+            // only if that call itself fails for some reason.
+            getApolloClient()
+              .reFetchObservableQueries()
+              .catch(function (e) {
+                console.error('[MoveFile] Failed to refresh queries after move, reloading instead:', e);
+                window.location.reload();
+              });
           }
         })
         .catch(function (err) {
