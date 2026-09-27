@@ -21,6 +21,14 @@ settings:
       After a successful move, queue an Auto Tag job scoped to the
       destination folder. Default is on.
     type: BOOLEAN
+  deleteEmptySourceFolders:
+    displayName: Delete Empty Source Folders
+    description: >-
+      After a successful move, delete each source folder left completely
+      empty on disk - never a configured library path, and only when a
+      real filesystem check confirms nothing (including untracked files)
+      remains in it. Default is on.
+    type: BOOLEAN
 
 ui:
   javascript:

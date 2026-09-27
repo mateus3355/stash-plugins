@@ -2,9 +2,10 @@ import requests
 
 
 class StashInterface:
-    """Minimal GraphQL client - Move File's Python side only ever does two
-    things (call moveFiles for a batch of file ids, then optionally queue
-    an Auto Tag job for the destination), so this is intentionally tiny
+    """Minimal GraphQL client - Move File's Python side only ever moves a
+    batch of file ids, optionally queues an Auto Tag job for the
+    destination, and optionally checks configured library paths before
+    cleaning up an emptied source folder - so this is intentionally tiny
     rather than a general-purpose wrapper."""
 
     def __init__(self, conn):
@@ -46,6 +47,11 @@ class StashInterface:
         )
         plugins = (data.get("configuration") or {}).get("plugins") or {}
         return plugins.get(plugin_id) or {}
+
+    def get_library_paths(self):
+        data = self._gql("query MoveFileLibraryPaths { configuration { general { stashes { path } } } }")
+        stashes = (data.get("configuration") or {}).get("general", {}).get("stashes") or []
+        return [s["path"] for s in stashes]
 
     def move_files(self, file_ids, destination_folder):
         data = self._gql(

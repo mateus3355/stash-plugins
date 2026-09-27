@@ -57,17 +57,47 @@
     });
   }
 
-  function runMoveTask(fileIds, destinationFolder, description) {
+  function runMoveTask(fileIds, sourceFolders, destinationFolder, description) {
     return gql(
       'mutation MoveFileRunTask($pluginId: ID!, $description: String, $args: Map) { ' +
         'runPluginTask(plugin_id: $pluginId, description: $description, args_map: $args) }',
       {
         pluginId: PLUGIN_ID,
         description: description,
-        args: { mode: 'move_files', file_ids: fileIds, destination_folder: destinationFolder },
+        args: {
+          mode: 'move_files',
+          file_ids: fileIds,
+          destination_folder: destinationFolder,
+          source_folders: sourceFolders,
+        },
       }
     ).then(function (data) {
       return data.runPluginTask;
+    });
+  }
+
+  function runPluginOperation(argsMap) {
+    return gql(
+      'mutation MoveFileRunOperation($pluginId: ID!, $args: Map) { ' +
+        'runPluginOperation(plugin_id: $pluginId, args: $args) }',
+      { pluginId: PLUGIN_ID, args: argsMap }
+    ).then(function (data) {
+      return data.runPluginOperation;
+    });
+  }
+
+  function cleanEmptySourceFolders(sourceFolders, destinationFolder) {
+    // The browser can't touch the filesystem itself - this runs the same
+    // "is it actually empty on disk, and not a library path" check the
+    // background task path uses, just synchronously via
+    // runPluginOperation instead of as part of a queued task.
+    if (!sourceFolders || !sourceFolders.length) {
+      return Promise.resolve();
+    }
+    return runPluginOperation({
+      mode: 'clean_empty_folders',
+      source_folders: sourceFolders,
+      destination_folder: destinationFolder,
     });
   }
 
@@ -87,13 +117,14 @@
   }
 
   // ---------------------------------------------------------------------
-  // Settings (Background Task Threshold, Auto Tag After Move) - fetched
-  // once at load and cached; falls back to the defaults if not loaded
-  // yet or unset.
+  // Settings (Background Task Threshold, Auto Tag After Move, Delete
+  // Empty Source Folders) - fetched once at load and cached; falls back
+  // to the defaults if not loaded yet or unset.
   // ---------------------------------------------------------------------
 
   var cachedThreshold = null;
   var cachedAutoTagAfterMove = null;
+  var cachedDeleteEmptySourceFolders = null;
 
   function getTaskThreshold() {
     return typeof cachedThreshold === 'number' ? cachedThreshold : DEFAULT_TASK_THRESHOLD;
@@ -101,6 +132,10 @@
 
   function getAutoTagAfterMove() {
     return typeof cachedAutoTagAfterMove === 'boolean' ? cachedAutoTagAfterMove : true;
+  }
+
+  function getDeleteEmptySourceFolders() {
+    return typeof cachedDeleteEmptySourceFolders === 'boolean' ? cachedDeleteEmptySourceFolders : true;
   }
 
   function loadThreshold() {
@@ -115,6 +150,9 @@
         }
         if (typeof settings.autoTagAfterMove === 'boolean') {
           cachedAutoTagAfterMove = settings.autoTagAfterMove;
+        }
+        if (typeof settings.deleteEmptySourceFolders === 'boolean') {
+          cachedDeleteEmptySourceFolders = settings.deleteEmptySourceFolders;
         }
       })
       .catch(function (e) {
@@ -197,25 +235,34 @@
       var action = usesTask
         ? runMoveTask(
             props.fileIds,
+            props.sourceFolders,
             destination,
             'Move ' + count + ' file(s) to ' + destination
           ).then(function () {
             return { queued: true };
           })
         : moveFilesDirect(props.fileIds, destination).then(function () {
-            if (!getAutoTagAfterMove()) {
-              return { queued: false };
+            // Best-effort follow-ups: the move itself already succeeded,
+            // so a failure in either of these shouldn't be treated as a
+            // failure of the whole action - just log it and still reload.
+            var followUps = [];
+            if (getAutoTagAfterMove()) {
+              followUps.push(
+                autoTagFolder(destination).catch(function (e) {
+                  console.error('[MoveFile] Failed to queue Auto Tag for ' + destination + ':', e);
+                })
+              );
             }
-            // Best-effort: the move itself already succeeded, so a failure
-            // to queue Auto Tag shouldn't be treated as a failure of the
-            // whole action - just log it and continue to the reload.
-            return autoTagFolder(destination)
-              .catch(function (e) {
-                console.error('[MoveFile] Failed to queue Auto Tag for ' + destination + ':', e);
-              })
-              .then(function () {
-                return { queued: false };
-              });
+            if (getDeleteEmptySourceFolders()) {
+              followUps.push(
+                cleanEmptySourceFolders(props.sourceFolders, destination).catch(function (e) {
+                  console.error('[MoveFile] Failed to clean up empty source folder(s):', e);
+                })
+              );
+            }
+            return Promise.all(followUps).then(function () {
+              return { queued: false };
+            });
           });
 
       action
@@ -316,7 +363,7 @@
 
   var modalContainer = null;
 
-  function openMoveModal(fileIds, initialFolder, itemLabel) {
+  function openMoveModal(fileIds, sourceFolders, initialFolder, itemLabel) {
     if (!modalContainer || !document.body.contains(modalContainer)) {
       modalContainer = document.createElement('div');
       modalContainer.id = 'movefile-modal-root';
@@ -342,6 +389,7 @@
             React.createElement(MoveFileModal, {
               show: show,
               fileIds: fileIds,
+              sourceFolders: sourceFolders,
               initialFolder: initialFolder,
               itemLabel: itemLabel,
               onClose: function () {
@@ -387,7 +435,8 @@
         className: 'minimal movefile-button',
         title: 'Move File',
         onClick: function () {
-          openMoveModal([file.id], parentFolderOf(file.path), '1 file');
+          var folder = parentFolderOf(file.path);
+          openMoveModal([file.id], [folder], folder, '1 file');
         },
       },
       'Move File'
@@ -447,16 +496,19 @@
       findScenesFiles(ids)
         .then(function (scenes) {
           var fileIds = [];
+          var sourceFoldersSet = {};
           scenes.forEach(function (s) {
             (s.files || []).forEach(function (f) {
               fileIds.push(f.id);
+              sourceFoldersSet[parentFolderOf(f.path)] = true;
             });
           });
           if (!fileIds.length) {
             window.alert('No files found for the selected scenes.');
             return;
           }
-          openMoveModal(fileIds, '', fileIds.length + ' file' + (fileIds.length > 1 ? 's' : ''));
+          var sourceFolders = Object.keys(sourceFoldersSet);
+          openMoveModal(fileIds, sourceFolders, '', fileIds.length + ' file' + (fileIds.length > 1 ? 's' : ''));
         })
         .catch(function (err) {
           window.alert('Failed to load selected files: ' + err.message);

@@ -19,7 +19,8 @@ disk **and** updates the database in one transaction, so there's no rescan neede
 and the DB never points at a stale path (same approach the community
 `sceneRename` plugin uses). On success, it also queues an **Auto Tag** job
 scoped to the destination folder, so anything that belongs there based on
-filename matching gets tagged without a separate manual step.
+filename matching gets tagged without a separate manual step - and if a
+source folder ends up completely empty on disk, it gets deleted.
 
 ## Small vs. large moves
 
@@ -55,6 +56,24 @@ which one failed.
   queues it itself once the move batch(es) finish, so it shows up as the same
   kind of follow-up job in the Task Queue log. Either way it only fires if at
   least one file actually moved.
+- **Delete Empty Source Folders** (boolean, default on) - after a successful
+  move, deletes each folder the moved file(s) came from if it's left completely
+  empty. Since the browser can't touch the filesystem itself, a direct move
+  triggers this via `runPluginOperation` (an immediate, synchronous plugin
+  call - see the schema's `runPluginOperation` docs: it runs right away rather
+  than going through the Task Queue); a background task move does the same
+  check itself as the last step of that same job. Several safety checks apply
+  before anything is deleted:
+  - "Empty" is checked with a real `os.listdir()` on the actual folder, not
+    just Stash's database view - a folder holding files Stash never scanned
+    (subtitle sidecars, `.nfo` files, whatever) is left alone.
+  - A folder that matches one of your configured library paths is **never**
+    deleted, no matter what it contains.
+  - The deletion itself uses `os.rmdir()` (not a recursive remove), which by
+    itself only ever succeeds on a genuinely empty directory - a safety net
+    in its own right even if the emptiness check above raced with something.
+  - Only the immediate source folder(s) are checked - it doesn't cascade
+    upward to newly-empty parent directories.
 
 ## Notes / current limitations
 
