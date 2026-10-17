@@ -35,6 +35,12 @@ use the same mutations the native bulk-selection toolbar uses.
 - Pagination uses the native `Pagination` component (page-jump control, item
   count byline), falling back to simple Previous/Next buttons only if that
   component hasn't been loaded into `PluginApi.components` yet this session.
+- A search box filters the active tab's content to this folder using Stash's
+  own free-text search (the same `filter.q` the native search bar writes to),
+  debounced so it doesn't query on every keystroke.
+- A sort dropdown + direction toggle reorders the active tab (Path, Title,
+  Date, Rating, ... - see "Why there's no native filter/sort toolbar" below
+  for why this is a custom control rather than the real one).
 
 ## Why it needed more than a simple path filter
 
@@ -54,6 +60,33 @@ then a basename with no further separator." That's matched **server-side**
 against the scene's full file path (see `pkg/sqlite/criterion_handlers.go`),
 so counts and pagination are correct without fetching more than one page's
 worth of data at a time, and without any client-side filtering.
+
+## Why there's no native filter/sort toolbar
+
+The full toolbar on the native Scenes/Images/Galleries pages (search box,
+funnel-icon criteria builder, sort dropdown, display-mode switcher, ...) is
+rendered by a single component per type - `FilteredSceneList` /
+`FilteredImageList` / `FilteredGalleryList` - which *is* technically reachable
+via `PluginApi.components`. In practice it can't be reused here:
+
+- It's driven by a `ListFilterModel` instance and `Criterion` subclasses
+  (`PathCriterion`, `TagsCriterion`, ...) from `src/models/list-filter/`, plus
+  a `View` enum used for persisting filter state - none of these classes are
+  exposed on `PluginApi` (only plain data/presentational pieces like
+  `SceneCardGrid` and `Pagination` are), so there's no supported way to hand
+  it "show me exactly this folder" from plugin JS.
+- Even if that were solved, the container pulls in a large chunk of the app -
+  `EditScenesDialog`, `DeleteScenesDialog`, the Tagger, Generate/Export
+  dialogs, the full filter sidebar - all at once. Given this plugin install
+  already caused one app-wide crash earlier (see the defensive try/catch note
+  below), taking on that much surface for a plugin page felt like the wrong
+  trade-off versus a small, purpose-built search box and sort dropdown that
+  talk to the same GraphQL fields (`filter.q`, `filter.sort`,
+  `filter.direction`) the real toolbar uses under the hood.
+
+So: real data, real card components, real pagination - just a hand-built
+toolbar instead of the real one, which is intentionally lighter-weight than
+replicating the native filter sidebar.
 
 ## Reused native components (why this looks like the real Scenes/Images/Galleries pages)
 

@@ -54,12 +54,20 @@
   margin-bottom: 1rem;
 }
 
+.folder-browser-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
 .folder-browser-search {
   position: relative;
   display: flex;
   align-items: center;
   max-width: 320px;
-  margin-bottom: 1rem;
+  margin-bottom: 0;
 }
 
 .folder-browser-search-icon {
@@ -78,6 +86,16 @@
   position: absolute;
   right: 0.1rem;
   padding: 0.25rem 0.5rem;
+}
+
+.folder-browser-sort {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.folder-browser-sort-select {
+  width: auto;
 }
 
 .folder-browser-bulk-toolbar {

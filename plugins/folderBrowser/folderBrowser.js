@@ -98,6 +98,10 @@
   // off this table rather than three near-duplicate code paths.
   // ---------------------------------------------------------------------
 
+  // sortFields mirror the real per-type lists in
+  // src/models/list-filter/{scenes,images,galleries}.ts - a reduced, useful
+  // subset (the full lists also include e.g. interactive/duplicate-specific
+  // fields that don't make much sense in a plain folder listing).
   var CONTENT_TYPES = {
     scenes: {
       label: 'Scenes',
@@ -110,6 +114,17 @@
       destroyResultKey: 'scenesDestroy',
       bulkUpdateMutation: 'mutation FolderBrowserBulkSceneUpdate($input: BulkSceneUpdateInput!) { bulkSceneUpdate(input: $input) { id } }',
       bulkUpdateResultKey: 'bulkSceneUpdate',
+      defaultSort: 'path',
+      sortFields: [
+        { value: 'path', label: 'Path' },
+        { value: 'title', label: 'Title' },
+        { value: 'date', label: 'Date' },
+        { value: 'rating', label: 'Rating' },
+        { value: 'duration', label: 'Duration' },
+        { value: 'filesize', label: 'File size' },
+        { value: 'o_counter', label: 'O-Counter' },
+        { value: 'random', label: 'Random' },
+      ],
     },
     images: {
       label: 'Images',
@@ -122,6 +137,16 @@
       destroyResultKey: 'imagesDestroy',
       bulkUpdateMutation: 'mutation FolderBrowserBulkImageUpdate($input: BulkImageUpdateInput!) { bulkImageUpdate(input: $input) { id } }',
       bulkUpdateResultKey: 'bulkImageUpdate',
+      defaultSort: 'path',
+      sortFields: [
+        { value: 'path', label: 'Path' },
+        { value: 'title', label: 'Title' },
+        { value: 'date', label: 'Date' },
+        { value: 'rating', label: 'Rating' },
+        { value: 'filesize', label: 'File size' },
+        { value: 'o_counter', label: 'O-Counter' },
+        { value: 'random', label: 'Random' },
+      ],
     },
     galleries: {
       label: 'Galleries',
@@ -134,14 +159,23 @@
       destroyResultKey: 'galleryDestroy',
       bulkUpdateMutation: 'mutation FolderBrowserBulkGalleryUpdate($input: BulkGalleryUpdateInput!) { bulkGalleryUpdate(input: $input) { id } }',
       bulkUpdateResultKey: 'bulkGalleryUpdate',
+      defaultSort: 'path',
+      sortFields: [
+        { value: 'path', label: 'Path' },
+        { value: 'title', label: 'Title' },
+        { value: 'date', label: 'Date' },
+        { value: 'rating', label: 'Rating' },
+        { value: 'images_count', label: 'Image count' },
+        { value: 'random', label: 'Random' },
+      ],
     },
   };
   var TAB_ORDER = ['scenes', 'images', 'galleries'];
 
-  function findItemsInFolder(contentType, folderPath, page, searchQuery) {
+  function findItemsInFolder(contentType, folderPath, page, searchQuery, sortBy, sortDirection) {
     var config = CONTENT_TYPES[contentType];
     var variables = {
-      filter: { page: page, per_page: PAGE_SIZE, sort: 'path', direction: 'ASC' },
+      filter: { page: page, per_page: PAGE_SIZE, sort: sortBy || config.defaultSort, direction: sortDirection || 'ASC' },
     };
     if (searchQuery) {
       variables.filter.q = searchQuery;
@@ -400,6 +434,14 @@
     var searchQuery = searchQueryState[0];
     var setSearchQuery = searchQueryState[1];
 
+    var sortByState = useState(CONTENT_TYPES.scenes.defaultSort);
+    var sortBy = sortByState[0];
+    var setSortBy = sortByState[1];
+
+    var sortDirState = useState('ASC');
+    var sortDir = sortDirState[0];
+    var setSortDir = sortDirState[1];
+
     var selectedIdsState = useState(function () { return new Set(); });
     var selectedIds = selectedIdsState[0];
     var setSelectedIds = selectedIdsState[1];
@@ -426,15 +468,18 @@
         });
     }, []);
 
-    // Reset to page 1, clear selection, and clear any search whenever the
-    // folder or tab changes - a search term from one folder/tab shouldn't
-    // silently keep filtering a different one.
+    // Reset to page 1, clear selection, and clear any search/sort whenever
+    // the folder or tab changes - a search term or sort field from one
+    // folder/tab shouldn't silently keep filtering/ordering a different one,
+    // and each content type has its own valid sort fields.
     useEffect(
       function () {
         setPage(1);
         setSelectedIds(new Set());
         setSearchInput('');
         setSearchQuery('');
+        setSortBy(CONTENT_TYPES[activeTab].defaultSort);
+        setSortDir('ASC');
       },
       [currentPath, activeTab]
     );
@@ -452,12 +497,12 @@
       [searchInput]
     );
 
-    // A new search term restarts pagination from page 1.
+    // A new search term or sort order restarts pagination from page 1.
     useEffect(
       function () {
         setPage(1);
       },
-      [searchQuery]
+      [searchQuery, sortBy, sortDir]
     );
 
     function reload() {
@@ -473,7 +518,7 @@
       setLoading(true);
       setError(null);
 
-      Promise.all([findFolderByPath(currentPath), findItemsInFolder(activeTab, currentPath, page, searchQuery)])
+      Promise.all([findFolderByPath(currentPath), findItemsInFolder(activeTab, currentPath, page, searchQuery, sortBy, sortDir)])
         .then(function (results) {
           if (cancelled) return;
           setFolder(results[0]);
@@ -494,7 +539,7 @@
       };
     }
 
-    useEffect(reload, [currentPath, activeTab, page, searchQuery]);
+    useEffect(reload, [currentPath, activeTab, page, searchQuery, sortBy, sortDir]);
 
     function navigateTo(path) {
       if (path) {
@@ -626,6 +671,36 @@
       );
     }
 
+    function renderSortControl() {
+      var fields = CONTENT_TYPES[activeTab].sortFields;
+      return React.createElement(
+        'div',
+        { className: 'folder-browser-sort' },
+        React.createElement(
+          Form.Control,
+          {
+            as: 'select',
+            className: 'folder-browser-sort-select',
+            value: sortBy,
+            onChange: function (e) { setSortBy(e.target.value); },
+          },
+          fields.map(function (f) {
+            return React.createElement('option', { key: f.value, value: f.value }, f.label);
+          })
+        ),
+        React.createElement(
+          Button,
+          {
+            variant: 'secondary',
+            className: 'folder-browser-sort-direction',
+            title: sortDir === 'ASC' ? 'Ascending' : 'Descending',
+            onClick: function () { setSortDir(sortDir === 'ASC' ? 'DESC' : 'ASC'); },
+          },
+          React.createElement(FontAwesomeIcon, { icon: sortDir === 'ASC' ? FA.faSortAmountUp : FA.faSortAmountDown, className: 'fa-icon' })
+        )
+      );
+    }
+
     function renderBulkToolbar() {
       if (selectedIds.size === 0) return null;
       return React.createElement(
@@ -706,7 +781,14 @@
       error ? React.createElement(Alert, { variant: 'danger', className: 'mt-2' }, error) : null,
       // Tabs and the search box stay mounted across reloads (e.g. a debounced
       // search firing) so the input never loses focus mid-keystroke.
-      currentPath ? React.createElement(React.Fragment, null, renderTabs(), renderSearchBox()) : null,
+      currentPath
+        ? React.createElement(
+            React.Fragment,
+            null,
+            renderTabs(),
+            React.createElement('div', { className: 'folder-browser-toolbar' }, renderSearchBox(), renderSortControl())
+          )
+        : null,
       loading
         ? React.createElement(Spinner, { animation: 'border', className: 'mt-3' })
         : React.createElement(
