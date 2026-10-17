@@ -95,7 +95,22 @@
           console.log(FileMonitorRunningStatusStr);
           if (ActionID == 0)
             PluginApi.patch.before("MainNavBar.UtilityItems", function (props) {
-              const { Icon } = PluginApi.components;
+              // NOTE: PluginApi.components.Icon (a thin PatchComponent
+              // wrapper around FontAwesomeIcon - see src/components/Shared/Icon.tsx)
+              // is only registered once that module has actually been
+              // evaluated by the main app bundle. This patch registers
+              // synchronously during this script's initial (synchronous,
+              // by default) AJAX call, which can run before that happens
+              // in a real browser depending on plugin load order/timing -
+              // when it does, `Icon` is undefined and React throws
+              // "Element type is invalid" (error #130) on every single
+              // page, since MainNavBar.UtilityItems renders globally.
+              // PluginApi.libraries.ReactFontAwesome.FontAwesomeIcon is
+              // the same underlying component Icon just wraps, but it's
+              // populated statically when PluginApi itself is built, not
+              // registration-order-dependent - using it directly here
+              // removes the race condition entirely.
+              const { FontAwesomeIcon } = PluginApi.libraries.ReactFontAwesome;
               return [
                 {
                   children: React.createElement(
@@ -115,7 +130,7 @@
                           className: "minimal d-flex align-items-center h-100",
                           title: FileMonitorRunningStatusStr,
                         },
-                        React.createElement(Icon, { icon: iconToUse })
+                        React.createElement(FontAwesomeIcon, { icon: iconToUse, className: "fa-icon" })
                       )
                     )
                   ), // faFileCircleXmark faFileCirclePlus
@@ -186,6 +201,18 @@
   PluginApi.register.route("/FileMonitor_Stop", FileMonitor_Stop);
   PluginApi.patch.before("SettingsToolsSection", function (props) {
     const { Setting } = PluginApi.components;
+    // Unlike Icon (see the MainNavBar.UtilityItems patch above), Setting
+    // has no equivalent always-available library fallback - it's a
+    // Stash-specific component, only registered once something has
+    // actually imported src/components/Settings/.../SettingSection (or
+    // similar). Settings/Tools is a page the user has to navigate to
+    // (unlike the nav bar, which renders on every page), so this is a
+    // narrower race than the Icon one, but the same failure mode if hit:
+    // skip adding our own row rather than crashing the whole Settings
+    // page if Setting isn't registered yet.
+    if (!Setting) {
+      return [{ children: props.children }];
+    }
     return [
       {
         children: React.createElement(
