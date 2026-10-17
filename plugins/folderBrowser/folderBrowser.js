@@ -138,11 +138,14 @@
   };
   var TAB_ORDER = ['scenes', 'images', 'galleries'];
 
-  function findItemsInFolder(contentType, folderPath, page) {
+  function findItemsInFolder(contentType, folderPath, page, searchQuery) {
     var config = CONTENT_TYPES[contentType];
     var variables = {
       filter: { page: page, per_page: PAGE_SIZE, sort: 'path', direction: 'ASC' },
     };
+    if (searchQuery) {
+      variables.filter.q = searchQuery;
+    }
     variables[config.filterVar] = {
       path: { modifier: 'MATCHES_REGEX', value: exactFolderRegex(folderPath) },
     };
@@ -389,6 +392,14 @@
     var page = pageState[0];
     var setPage = pageState[1];
 
+    var searchInputState = useState('');
+    var searchInput = searchInputState[0];
+    var setSearchInput = searchInputState[1];
+
+    var searchQueryState = useState('');
+    var searchQuery = searchQueryState[0];
+    var setSearchQuery = searchQueryState[1];
+
     var selectedIdsState = useState(function () { return new Set(); });
     var selectedIds = selectedIdsState[0];
     var setSelectedIds = selectedIdsState[1];
@@ -415,13 +426,38 @@
         });
     }, []);
 
-    // Reset to page 1 and clear selection whenever the folder or tab changes.
+    // Reset to page 1, clear selection, and clear any search whenever the
+    // folder or tab changes - a search term from one folder/tab shouldn't
+    // silently keep filtering a different one.
     useEffect(
       function () {
         setPage(1);
         setSelectedIds(new Set());
+        setSearchInput('');
+        setSearchQuery('');
       },
       [currentPath, activeTab]
+    );
+
+    // Debounce the search box so every keystroke doesn't trigger a query.
+    useEffect(
+      function () {
+        var timer = setTimeout(function () {
+          setSearchQuery(searchInput.trim());
+        }, 400);
+        return function () {
+          clearTimeout(timer);
+        };
+      },
+      [searchInput]
+    );
+
+    // A new search term restarts pagination from page 1.
+    useEffect(
+      function () {
+        setPage(1);
+      },
+      [searchQuery]
     );
 
     function reload() {
@@ -437,7 +473,7 @@
       setLoading(true);
       setError(null);
 
-      Promise.all([findFolderByPath(currentPath), findItemsInFolder(activeTab, currentPath, page)])
+      Promise.all([findFolderByPath(currentPath), findItemsInFolder(activeTab, currentPath, page, searchQuery)])
         .then(function (results) {
           if (cancelled) return;
           setFolder(results[0]);
@@ -458,7 +494,7 @@
       };
     }
 
-    useEffect(reload, [currentPath, activeTab, page]);
+    useEffect(reload, [currentPath, activeTab, page, searchQuery]);
 
     function navigateTo(path) {
       if (path) {
@@ -568,6 +604,28 @@
       );
     }
 
+    function renderSearchBox() {
+      return React.createElement(
+        'div',
+        { className: 'folder-browser-search' },
+        React.createElement(FontAwesomeIcon, { icon: FA.faSearch, className: 'fa-icon folder-browser-search-icon' }),
+        React.createElement(Form.Control, {
+          type: 'text',
+          className: 'folder-browser-search-input',
+          placeholder: 'Search ' + CONTENT_TYPES[activeTab].label.toLowerCase() + ' in this folder…',
+          value: searchInput,
+          onChange: function (e) { setSearchInput(e.target.value); },
+        }),
+        searchInput
+          ? React.createElement(
+              Button,
+              { variant: 'link', className: 'folder-browser-search-clear', onClick: function () { setSearchInput(''); } },
+              React.createElement(FontAwesomeIcon, { icon: FA.faTimes, className: 'fa-icon' })
+            )
+          : null
+      );
+    }
+
     function renderBulkToolbar() {
       if (selectedIds.size === 0) return null;
       return React.createElement(
@@ -609,7 +667,10 @@
         return React.createElement(Alert, { variant: 'warning' }, config.gridComponent + ' is not loaded yet - visit the ' + config.label + ' page once, then come back here.');
       }
       if (!itemsResult.items.length) {
-        return React.createElement('div', { className: 'text-muted folder-browser-empty' }, 'No ' + config.label.toLowerCase() + ' directly in this folder.');
+        var emptyMessage = searchQuery
+          ? 'No ' + config.label.toLowerCase() + ' matching "' + searchQuery + '" directly in this folder.'
+          : 'No ' + config.label.toLowerCase() + ' directly in this folder.';
+        return React.createElement('div', { className: 'text-muted folder-browser-empty' }, emptyMessage);
       }
 
       var gridProps = {
@@ -643,6 +704,9 @@
       React.createElement('h3', null, 'Folder Browser'),
       renderBreadcrumb(),
       error ? React.createElement(Alert, { variant: 'danger', className: 'mt-2' }, error) : null,
+      // Tabs and the search box stay mounted across reloads (e.g. a debounced
+      // search firing) so the input never loses focus mid-keystroke.
+      currentPath ? React.createElement(React.Fragment, null, renderTabs(), renderSearchBox()) : null,
       loading
         ? React.createElement(Spinner, { animation: 'border', className: 'mt-3' })
         : React.createElement(
@@ -650,13 +714,7 @@
             null,
             !currentPath ? renderLibraryRoots() : renderSubFolders(),
             currentPath
-              ? React.createElement(
-                  React.Fragment,
-                  null,
-                  renderTabs(),
-                  renderBulkToolbar(),
-                  renderItems()
-                )
+              ? React.createElement(React.Fragment, null, renderBulkToolbar(), renderItems())
               : null
           ),
       modal === 'delete'
