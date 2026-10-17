@@ -2,12 +2,13 @@
 
 Adds a **Folders** item to the main nav bar (alongside Scenes, Images, Groups, ...)
 leading to a page for navigating your library by folder, like a file explorer -
-browse into subfolders and see the scenes directly inside each one, rendered
-using the exact same `SceneCardGrid`/`SceneCard` components as the native Scenes
-page.
+browse into subfolders and see the scenes, images, and galleries directly
+inside each one, rendered using the exact same card-grid components as the
+native Scenes/Images/Galleries pages.
 
 Pure frontend plugin - no Python backend, no settings. Everything is read-only
-GraphQL queries.
+GraphQL queries, except the bulk Edit/Delete actions described below, which
+use the same mutations the native bulk-selection toolbar uses.
 
 ## How it works
 
@@ -15,11 +16,25 @@ GraphQL queries.
   configured library paths as top-level "drives" to pick from, the same idea as
   "This PC" in Windows Explorer.
 - Picking a folder shows its direct subfolders as clickable tiles, a breadcrumb
-  trail back to the library root, and the scenes whose file lives **directly**
-  in that folder (not in any subfolder - those show up when you navigate into
-  the subfolder itself).
+  trail back to the library root, and - via **Scenes / Images / Galleries**
+  tabs - whichever content lives **directly** in that folder (not in any
+  subfolder - those show up when you navigate into the subfolder itself).
 - The current folder's path lives in the URL (`?path=...`), so back/forward and
-  bookmarking work normally.
+  bookmarking work normally. Switching tabs or folders resets the page number
+  and clears the current selection.
+- Clicking a scene's selection checkbox (or an image's/gallery's) shows a bulk
+  toolbar with **Edit** and **Delete**, same as the native list pages:
+  - **Edit** can set Rating and Organized, and add tags (scenes/images/galleries
+    all support this) - each field is only changed if you touch it.
+  - **Delete** asks whether to also delete the underlying file(s) from disk
+    (off by default) before calling the same `scenesDestroy`/`imagesDestroy`/
+    `galleryDestroy` mutations the native UI uses.
+- Scene cards get a real queue, so opening one and finishing it auto-advances
+  to the next scene in that folder listing, the same as queuing up the native
+  Scenes page.
+- Pagination uses the native `Pagination` component (page-jump control, item
+  count byline), falling back to simple Previous/Next buttons only if that
+  component hasn't been loaded into `PluginApi.components` yet this session.
 
 ## Why it needed more than a simple path filter
 
@@ -40,33 +55,47 @@ against the scene's full file path (see `pkg/sqlite/criterion_handlers.go`),
 so counts and pagination are correct without fetching more than one page's
 worth of data at a time, and without any client-side filtering.
 
-## Reused native components (why this looks like the real Scenes page)
+## Reused native components (why this looks like the real Scenes/Images/Galleries pages)
 
-- **`SceneCardGrid`** (and therefore `SceneCard`/`GridCard` underneath) is a
-  registered `PatchComponent`, so it's reachable from plugin JS via
-  `PluginApi.components.SceneCardGrid` - the exact same component the real
-  Scenes page uses, so scene tiles look and behave identically (thumbnails,
-  hover overlay, rating, o-counter, duration, click to open the scene, ...).
-- Scene data comes from `GQL.FindScenesDocument` - Stash's own compiled
-  `findScenes` query document - run through the app's real Apollo Client
-  (`PluginApi.utils.StashService.getClient()`), rather than a hand-built
-  query. That guarantees the returned scenes have exactly the shape
-  `SceneCardGrid` expects, with no risk of missing a field it needs.
+- **`SceneCardGrid`**, **`ImageCardGrid`**, and **`GalleryCardGrid`** are all
+  registered `PatchComponent`s, so they're reachable from plugin JS via
+  `PluginApi.components.<Name>` - the exact same components the native pages
+  use, so tiles look and behave identically (thumbnails, hover overlay,
+  rating, o-counter, duration, click to open, ...). Similarly, `Pagination`
+  and `TagSelect` (used in the bulk Edit dialog's "Add tags" field) are reused
+  the same way.
+- Content data comes from Stash's own compiled query documents
+  (`GQL.FindScenesDocument`/`FindImagesDocument`/`FindGalleriesDocument`), run
+  through the app's real Apollo Client (`PluginApi.utils.StashService.getClient()`),
+  rather than hand-built queries. That guarantees the returned data has
+  exactly the shape each grid component expects, with no risk of missing a
+  field it needs.
 - The **Folders** nav link is injected via
   `PluginApi.patch.before("MainNavBar.MenuItems", ...)` - a real
   `PatchComponent` that just renders `<Nav>{children}</Nav>` - by appending
   one more child to `props.children`, the same technique
   `PluginApi.register.route()` itself uses internally to add a `<Route>` to
   `PluginRoutes`.
+- The scene queue is a plain object shaped like `SceneQueue`
+  (`makeLink(sceneID, options)`), built from the current folder listing's
+  scene IDs in the same `?qs=<id>&qs=<id>...` URL format `SceneQueue.fromSceneIDList()`
+  produces - `SceneQueue` itself isn't exposed via `PluginApi`, but `SceneCard`
+  only ever calls `queue.makeLink()`, so this is enough for "continue to next
+  scene" playback to work identically to the native Scenes page.
 
 ## Notes / current limitations
 
-- Scopes to **scenes** only, matching what was asked for ("similar to the
-  scene view"). Images/galleries could be added the same way later.
-- No selection/bulk actions wired up yet (`SceneCardGrid` requires a
-  `selectedIds`/`onSelectChange` pair, so clicking a card's checkbox does
-  visually toggle selection, but nothing currently reads it).
-- Scene cards don't get a `queue`, so clicking one opens the scene normally
-  but without "continue to the next scene in this folder" playback - that
-  would need building a `SceneQueue` from the current folder's listing.
-- Pagination is a simple Previous/Next, not the native page-jump control.
+- Bulk Edit is a simplified subset of the native Edit dialog - Rating,
+  Organized, and adding tags - not full parity (e.g. no removing tags, no
+  performers/studio editing). The real `EditScenesDialog`/`DeleteScenesDialog`
+  aren't registered `PatchComponent`s, so they're not reachable via
+  `PluginApi.components` at all; this reimplements just the common case
+  directly against the `bulkSceneUpdate`/`bulkImageUpdate`/`bulkGalleryUpdate`
+  mutations.
+- Clicking an image tile navigates to that image's own page rather than
+  opening the native lightbox/carousel in place.
+- The nav bar patch is wrapped in a try/catch that falls back to the
+  unmodified nav bar on any error, so a problem here can never take down
+  every page - see `filemonitor`/`moveFile`'s equivalent patches for the same
+  defensive pattern, adopted project-wide after an earlier plugin install
+  caused an app-wide crash.
