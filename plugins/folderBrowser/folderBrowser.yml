@@ -1,0 +1,13 @@
+name: Folder Browser
+description: >-
+  Adds a "Folders" item to the main nav bar leading to a page for navigating
+  your library by folder, like a file explorer - browse into subfolders and
+  see the scenes directly inside each one, rendered the same way as the
+  native Scenes page.
+version: 1.0
+
+ui:
+  javascript:
+    - folderBrowser.js
+  css:
+    - folderBrowser.css
