@@ -115,6 +115,13 @@ replicating the native filter sidebar.
   produces - `SceneQueue` itself isn't exposed via `PluginApi`, but `SceneCard`
   only ever calls `queue.makeLink()`, so this is enough for "continue to next
   scene" playback to work identically to the native Scenes page.
+- `itemsResult` is tagged with the tab it was fetched for. Switching tabs
+  re-renders with the new `activeTab` before that tab's refetch resolves, so
+  without the tag, the grid for the new tab would briefly be handed the old
+  tab's items (e.g. images passed into `SceneCardGrid`, which indexes into
+  `scene.files` and isn't shaped to tolerate that) - that crashes during
+  render/commit, before any effect gets a chance to clean the stale state up,
+  so it has to be guarded at render time instead.
 
 ## Notes / current limitations
 

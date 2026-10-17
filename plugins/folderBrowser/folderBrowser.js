@@ -418,7 +418,15 @@
     var folder = folderState[0];
     var setFolder = folderState[1];
 
-    var itemsResultState = useState({ items: [], count: 0 });
+    // tab is tagged onto itemsResult (rather than relying on activeTab
+    // directly) because switching tabs re-renders with the new activeTab
+    // before the refetch for that tab resolves - without this tag,
+    // renderItems() would momentarily hand the *previous* tab's items (e.g.
+    // images) to the new tab's real grid component (e.g. SceneCardGrid,
+    // which indexes into scene.files), crashing the whole page. That render
+    // happens synchronously, so an effect clearing stale state afterwards is
+    // too late - this has to be checked at render time instead.
+    var itemsResultState = useState({ items: [], count: 0, tab: null });
     var itemsResult = itemsResultState[0];
     var setItemsResult = itemsResultState[1];
 
@@ -506,9 +514,11 @@
     );
 
     function reload() {
+      var tabAtRequestTime = activeTab;
+
       if (!currentPath) {
         setFolder(null);
-        setItemsResult({ items: [], count: 0 });
+        setItemsResult({ items: [], count: 0, tab: tabAtRequestTime });
         setLoading(false);
         setError(null);
         return function () {};
@@ -522,13 +532,13 @@
         .then(function (results) {
           if (cancelled) return;
           setFolder(results[0]);
-          setItemsResult(results[1]);
+          setItemsResult({ items: results[1].items, count: results[1].count, tab: tabAtRequestTime });
         })
         .catch(function (e) {
           if (cancelled) return;
           setError((e && e.message) || String(e));
           setFolder(null);
-          setItemsResult({ items: [], count: 0 });
+          setItemsResult({ items: [], count: 0, tab: tabAtRequestTime });
         })
         .finally(function () {
           if (!cancelled) setLoading(false);
@@ -737,6 +747,13 @@
 
     function renderItems() {
       var config = CONTENT_TYPES[activeTab];
+      // itemsResult can still hold the PREVIOUS tab's items for one render
+      // right after switching tabs, before the new tab's fetch resolves -
+      // handing those to this tab's grid component would crash it (e.g. a
+      // real image passed to SceneCardGrid, which expects scene.files).
+      if (itemsResult.tab !== activeTab) {
+        return React.createElement(Spinner, { animation: 'border', className: 'mt-3' });
+      }
       var GridComponent = PluginApi.components[config.gridComponent];
       if (!GridComponent) {
         return React.createElement(Alert, { variant: 'warning' }, config.gridComponent + ' is not loaded yet - visit the ' + config.label + ' page once, then come back here.');
