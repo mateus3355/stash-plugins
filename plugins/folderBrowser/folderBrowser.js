@@ -361,26 +361,38 @@
   // MainNavBar.MenuItems is a real PatchComponent (just <Nav>{children}</Nav>) -
   // before() lets us append an extra child to props.children, the same way
   // registerRoute() appends an extra <Route> to PluginRoutes' children.
+  //
+  // This runs on EVERY page (the nav bar is global), so it's wrapped
+  // defensively: if anything in here ever throws - a library/version
+  // mismatch we didn't anticipate, a future Stash UI change, whatever -
+  // the worst outcome must be "the Folders link doesn't appear", never
+  // "the whole app is broken". Never let a nav-bar patch be able to take
+  // down every page.
   PluginApi.patch.before('MainNavBar.MenuItems', function (props) {
-    var navLink = React.createElement(
-      Nav.Link,
-      { key: 'folder-browser', as: 'div', className: 'col-4 col-sm-3 col-md-2 col-lg-auto' },
-      React.createElement(
-        NavLink,
-        { exact: true, to: ROUTE_PATH, activeClassName: 'active' },
+    try {
+      var navLink = React.createElement(
+        Nav.Link,
+        { key: 'folder-browser', as: 'div', className: 'col-4 col-sm-3 col-md-2 col-lg-auto' },
         React.createElement(
-          Button,
-          { className: 'minimal p-4 p-xl-2 d-flex d-xl-inline-block flex-column justify-content-between align-items-center' },
-          React.createElement(FontAwesomeIcon, { icon: faFolderOpen, className: 'nav-menu-icon d-block d-xl-inline mb-2 mb-xl-0' }),
-          React.createElement('span', null, 'Folders')
+          NavLink,
+          { exact: true, to: ROUTE_PATH, activeClassName: 'active' },
+          React.createElement(
+            Button,
+            { className: 'minimal p-4 p-xl-2 d-flex d-xl-inline-block flex-column justify-content-between align-items-center' },
+            React.createElement(FontAwesomeIcon, { icon: faFolderOpen, className: 'nav-menu-icon d-block d-xl-inline mb-2 mb-xl-0' }),
+            React.createElement('span', null, 'Folders')
+          )
         )
-      )
-    );
+      );
 
-    return [
-      Object.assign({}, props, {
-        children: React.createElement(React.Fragment, null, props.children, navLink),
-      }),
-    ];
+      return [
+        Object.assign({}, props, {
+          children: React.createElement(React.Fragment, null, props.children, navLink),
+        }),
+      ];
+    } catch (e) {
+      console.error('[FolderBrowser] Failed to add nav link, leaving the nav bar unmodified:', e);
+      return [props];
+    }
   });
 })();

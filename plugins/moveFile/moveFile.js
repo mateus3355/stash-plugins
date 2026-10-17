@@ -438,24 +438,29 @@
   // result), not (props, result). Confirmed against how the community
   // tagCopyPaste plugin does the same thing.
   PluginApi.patch.after('SceneFileInfoPanel', function (props, _legacyContext, result) {
-    var scene = props && props.scene;
-    var file = scene && scene.files && scene.files[0];
-    if (!file) return result;
+    try {
+      var scene = props && props.scene;
+      var file = scene && scene.files && scene.files[0];
+      if (!file) return result;
 
-    var button = React.createElement(
-      Button,
-      {
-        className: 'minimal movefile-button',
-        title: 'Move File',
-        onClick: function () {
-          var folder = parentFolderOf(file.path);
-          openMoveModal([file.id], [folder], folder, '1 file');
+      var button = React.createElement(
+        Button,
+        {
+          className: 'minimal movefile-button',
+          title: 'Move File',
+          onClick: function () {
+            var folder = parentFolderOf(file.path);
+            openMoveModal([file.id], [folder], folder, '1 file');
+          },
         },
-      },
-      'Move File'
-    );
+        'Move File'
+      );
 
-    return React.createElement(React.Fragment, null, result, button);
+      return React.createElement(React.Fragment, null, result, button);
+    } catch (e) {
+      console.error('[MoveFile] Failed to add Move File button, leaving the file info panel unmodified:', e);
+      return result;
+    }
   });
 
   // ---------------------------------------------------------------------
@@ -472,10 +477,14 @@
   // that Set, since the bulk operations menu (built in a sibling component,
   // FilteredSceneList) has no official extension point of its own.
   PluginApi.patch.before('SceneList', function (props) {
-    if (props && props.selectedIds) {
-      currentSelectedSceneIds = props.selectedIds;
+    try {
+      if (props && props.selectedIds) {
+        currentSelectedSceneIds = props.selectedIds;
+      }
+      syncAllOperationsDropdowns();
+    } catch (e) {
+      console.error('[MoveFile] Failed to sync the bulk operations menu:', e);
     }
-    syncAllOperationsDropdowns();
     return [props];
   });
 
