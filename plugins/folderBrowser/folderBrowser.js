@@ -9,16 +9,16 @@
   var Button = Bootstrap.Button;
   var Spinner = Bootstrap.Spinner;
   var Alert = Bootstrap.Alert;
-  var Card = Bootstrap.Card;
   var Modal = Bootstrap.Modal;
   var Form = Bootstrap.Form;
   var ReactRouterDOM = PluginApi.libraries.ReactRouterDOM;
   var NavLink = ReactRouterDOM.NavLink;
-  var useHistory = ReactRouterDOM.useHistory;
+  var Link = ReactRouterDOM.Link;
   var useLocation = ReactRouterDOM.useLocation;
   var FontAwesomeIcon = PluginApi.libraries.ReactFontAwesome.FontAwesomeIcon;
   var FA = PluginApi.libraries.FontAwesomeSolid;
   var getApolloClient = PluginApi.utils.StashService.getClient;
+  var useLightbox = PluginApi.hooks.useLightbox;
 
   var ROUTE_PATH = '/plugin/folder-browser';
   var PAGE_SIZE = 40;
@@ -76,6 +76,13 @@
 
   function escapeRegExp(s) {
     return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
+  // Shared by the folder Links (so ctrl/cmd/middle-click can open a folder
+  // in a new tab, which a plain onClick-driven history.push can't) and
+  // anywhere else that needs this page's URL for a given folder.
+  function folderUrl(path) {
+    return path ? ROUTE_PATH + '?path=' + encodeURIComponent(path) : ROUTE_PATH;
   }
 
   // Matches a file path that is "folderPath" + exactly one path separator
@@ -402,7 +409,6 @@
     var useState = React.useState;
     var useEffect = React.useEffect;
 
-    var history = useHistory();
     var location = useLocation();
     var currentPath = new URLSearchParams(location.search).get('path') || '';
 
@@ -429,6 +435,21 @@
     var itemsResultState = useState({ items: [], count: 0, tab: null });
     var itemsResult = itemsResultState[0];
     var setItemsResult = itemsResultState[1];
+
+    // Only feed the lightbox images while actually on the Images tab (and
+    // only once itemsResult is tagged for it - see the tab-mismatch comment
+    // above) so switching away doesn't leave it primed with stale images.
+    // The effect inside useLightbox depends on each field individually
+    // (not this object's identity), so a fresh literal here each render is
+    // fine and doesn't cause extra lightbox-context updates.
+    var showLightbox = useLightbox(
+      {
+        images: activeTab === 'images' && itemsResult.tab === 'images' ? itemsResult.items : [],
+        showNavigation: true,
+        slideshowEnabled: false,
+      },
+      []
+    );
 
     var pageState = useState(1);
     var page = pageState[0];
@@ -551,14 +572,6 @@
 
     useEffect(reload, [currentPath, activeTab, page, searchQuery, sortBy, sortDir]);
 
-    function navigateTo(path) {
-      if (path) {
-        history.push(ROUTE_PATH + '?path=' + encodeURIComponent(path));
-      } else {
-        history.push(ROUTE_PATH);
-      }
-    }
-
     function onSelectChange(id, selected) {
       setSelectedIds(function (prev) {
         var next = new Set(prev);
@@ -579,11 +592,9 @@
 
     function renderBreadcrumb() {
       var crumbs = [
-        React.createElement(
-          Button,
-          { key: 'root', variant: 'link', className: 'folder-browser-crumb', onClick: function () { navigateTo(''); } },
-          'Library'
-        ),
+        folder
+          ? React.createElement(Link, { key: 'root', to: folderUrl(''), className: 'btn btn-link folder-browser-crumb' }, 'Library')
+          : React.createElement('span', { key: 'root', className: 'folder-browser-crumb folder-browser-crumb-current' }, 'Library'),
       ];
 
       if (folder) {
@@ -591,17 +602,9 @@
         ancestors.concat([folder]).forEach(function (f) {
           crumbs.push(React.createElement(FontAwesomeIcon, { key: f.id + '-sep', icon: FA.faChevronRight, className: 'fa-icon folder-browser-crumb-sep' }));
           crumbs.push(
-            React.createElement(
-              Button,
-              {
-                key: f.id,
-                variant: 'link',
-                className: 'folder-browser-crumb',
-                disabled: f.id === folder.id,
-                onClick: function () { navigateTo(f.path); },
-              },
-              f.basename || f.path
-            )
+            f.id === folder.id
+              ? React.createElement('span', { key: f.id, className: 'folder-browser-crumb folder-browser-crumb-current' }, f.basename || f.path)
+              : React.createElement(Link, { key: f.id, to: folderUrl(f.path), className: 'btn btn-link folder-browser-crumb' }, f.basename || f.path)
           );
         });
       }
@@ -621,8 +624,8 @@
         { className: 'folder-browser-tiles' },
         libraryPaths.map(function (p) {
           return React.createElement(
-            Card,
-            { key: p, className: 'folder-browser-tile', onClick: function () { navigateTo(p); } },
+            Link,
+            { key: p, to: folderUrl(p), className: 'folder-browser-tile' },
             React.createElement(FontAwesomeIcon, { icon: FA.faFolderOpen, className: 'fa-icon folder-browser-tile-icon' }),
             React.createElement('div', { className: 'folder-browser-tile-label' }, p)
           );
@@ -640,8 +643,8 @@
           .sort(function (a, b) { return a.basename.localeCompare(b.basename); })
           .map(function (f) {
             return React.createElement(
-              Card,
-              { key: f.id, className: 'folder-browser-tile', onClick: function () { navigateTo(f.path); } },
+              Link,
+              { key: f.id, to: folderUrl(f.path), className: 'folder-browser-tile' },
               React.createElement(FontAwesomeIcon, { icon: FA.faFolder, className: 'fa-icon folder-browser-tile-icon' }),
               React.createElement('div', { className: 'folder-browser-tile-label' }, f.basename)
             );
@@ -775,8 +778,15 @@
         gridProps.queue = makeSceneQueue(itemsResult.items.map(function (s) { return s.id; }));
       } else if (activeTab === 'images') {
         gridProps.images = itemsResult.items;
-        gridProps.onPreview = function (index) {
-          history.push('/images/' + itemsResult.items[index].id);
+        // Matches the native Images page: ImageCardGrid calls
+        // onPreview(index, ev) for the hover "preview" (magnifying glass)
+        // button specifically - preventDefault() stops that click's bubble
+        // from also triggering the card's own link to the image's detail
+        // page. Clicking the rest of the card still goes to the detail
+        // page, same as the native page.
+        gridProps.onPreview = function (index, ev) {
+          showLightbox({ initialIndex: index });
+          if (ev && ev.preventDefault) ev.preventDefault();
         };
       } else {
         gridProps.galleries = itemsResult.items;
