@@ -106,6 +106,18 @@ replicating the native filter sidebar.
   rating, o-counter, duration, click to open, ...). Similarly, `Pagination`
   and `TagSelect` (used in the bulk Edit dialog's "Add tags" field) are reused
   the same way.
+- Those five components only get registered into `PluginApi.components` once
+  their defining module is actually evaluated somewhere - normally the first
+  time you visit the matching native page in the same session. On a cold
+  visit to this page (new tab, bookmark, first page opened this session)
+  they wouldn't be loaded yet. This page forces them to load itself, via
+  `PluginApi.hooks.useLoadComponents([...])` with the `SceneList`, `Images`,
+  `Galleries`, and `Tags` entries from `PluginApi.loadableComponents` (NOT
+  `Scenes` - `Scenes.tsx` only lazy-wraps `SceneList` rather than importing
+  it directly, so requesting it doesn't actually load `SceneCardGrid`/
+  `Pagination`), and shows the same loading spinner used for data fetches
+  while that resolves - so cold visits get the real grids immediately
+  instead of a "not loaded yet, visit the X page first" warning.
 - Content data comes from Stash's own compiled query documents
   (`GQL.FindScenesDocument`/`FindImagesDocument`/`FindGalleriesDocument`), run
   through the app's real Apollo Client (`PluginApi.utils.StashService.getClient()`),

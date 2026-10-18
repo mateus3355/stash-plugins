@@ -19,6 +19,28 @@
   var FA = PluginApi.libraries.FontAwesomeSolid;
   var getApolloClient = PluginApi.utils.StashService.getClient;
   var useLightbox = PluginApi.hooks.useLightbox;
+  var useLoadComponents = PluginApi.hooks.useLoadComponents;
+  var loadableComponents = PluginApi.loadableComponents;
+
+  // The components this page reuses (SceneCardGrid, ImageCardGrid,
+  // GalleryCardGrid, Pagination, TagSelect) are only registered into
+  // PluginApi.components as a side effect of their defining module actually
+  // being evaluated somewhere - normally the first time you visit the
+  // matching native page. Without this, opening this page cold (e.g. a
+  // fresh tab, bookmark, or this being the first page visited this
+  // session) would briefly show "X is not loaded yet" warnings instead of
+  // the real grids. SceneList (not Scenes - Scenes.tsx only lazy-wraps
+  // SceneList rather than importing it, so requesting Scenes doesn't
+  // actually load SceneCardGrid/Pagination), Images, and Galleries cover
+  // the three grids plus Pagination; Tags covers TagSelect (used in the
+  // bulk Edit dialog's "Add tags" field) - none of the three list modules
+  // reach TagSelect on their own.
+  var COMPONENT_LOADERS = [
+    loadableComponents.SceneList,
+    loadableComponents.Images,
+    loadableComponents.Galleries,
+    loadableComponents.Tags,
+  ];
 
   // Deliberately NOT under /plugin/... - the Go backend mounts a dedicated
   // router at that prefix (internal/api/routes_plugin.go, serving each
@@ -420,6 +442,12 @@
 
     var location = useLocation();
     var currentPath = new URLSearchParams(location.search).get('path') || '';
+
+    // true until SceneCardGrid/ImageCardGrid/GalleryCardGrid/Pagination/
+    // TagSelect have all been loaded (see COMPONENT_LOADERS above) -
+    // folded into the loading spinner below so a cold visit to this page
+    // never shows the "not loaded yet" fallback warnings in normal use.
+    var componentsLoading = useLoadComponents(COMPONENT_LOADERS);
 
     var tabState = useState('scenes');
     var activeTab = tabState[0];
@@ -825,7 +853,7 @@
             React.createElement('div', { className: 'folder-browser-toolbar' }, renderSearchBox(), renderSortControl())
           )
         : null,
-      loading
+      loading || componentsLoading
         ? React.createElement(Spinner, { animation: 'border', className: 'mt-3' })
         : React.createElement(
             React.Fragment,
