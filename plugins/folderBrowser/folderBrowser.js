@@ -9,6 +9,8 @@
   var Button = Bootstrap.Button;
   var Spinner = Bootstrap.Spinner;
   var Alert = Bootstrap.Alert;
+  var Card = Bootstrap.Card;
+  var ButtonGroup = Bootstrap.ButtonGroup;
   var Modal = Bootstrap.Modal;
   var Form = Bootstrap.Form;
   var ReactRouterDOM = PluginApi.libraries.ReactRouterDOM;
@@ -19,28 +21,6 @@
   var FA = PluginApi.libraries.FontAwesomeSolid;
   var getApolloClient = PluginApi.utils.StashService.getClient;
   var useLightbox = PluginApi.hooks.useLightbox;
-  var useLoadComponents = PluginApi.hooks.useLoadComponents;
-  var loadableComponents = PluginApi.loadableComponents;
-
-  // The components this page reuses (SceneCardGrid, ImageCardGrid,
-  // GalleryCardGrid, Pagination, TagSelect) are only registered into
-  // PluginApi.components as a side effect of their defining module actually
-  // being evaluated somewhere - normally the first time you visit the
-  // matching native page. Without this, opening this page cold (e.g. a
-  // fresh tab, bookmark, or this being the first page visited this
-  // session) would briefly show "X is not loaded yet" warnings instead of
-  // the real grids. SceneList (not Scenes - Scenes.tsx only lazy-wraps
-  // SceneList rather than importing it, so requesting Scenes doesn't
-  // actually load SceneCardGrid/Pagination), Images, and Galleries cover
-  // the three grids plus Pagination; Tags covers TagSelect (used in the
-  // bulk Edit dialog's "Add tags" field) - none of the three list modules
-  // reach TagSelect on their own.
-  var COMPONENT_LOADERS = [
-    loadableComponents.SceneList,
-    loadableComponents.Images,
-    loadableComponents.Galleries,
-    loadableComponents.Tags,
-  ];
 
   // Deliberately NOT under /plugin/... - the Go backend mounts a dedicated
   // router at that prefix (internal/api/routes_plugin.go, serving each
@@ -130,6 +110,242 @@
   }
 
   // ---------------------------------------------------------------------
+  // Hand-rolled card grids, instead of reusing the native
+  // SceneCardGrid/ImageCardGrid/GalleryCardGrid/Pagination/TagSelect
+  // components via PluginApi.components. Those only get registered once
+  // their defining module has actually been evaluated somewhere - normally
+  // by visiting the matching native page first - and forcing that to
+  // happen via PluginApi.hooks.useLoadComponents still left a visit to the
+  // Scenes page as a practical prerequisite. stash-tv
+  // (.tmp/stash-tv/packages/tv-ui) hits the exact same problem and solves
+  // it the same way: it never touches PluginApi.components at all, and
+  // instead builds its own card/slide UI straight from GraphQL data. This
+  // does the same thing, reusing Stash's own CSS classes (grid-card,
+  // scene-card, rating-banner, studio-overlay, ...) so cards still look
+  // consistent with the native app, without depending on its lazy-loaded
+  // component registry for anything.
+  // ---------------------------------------------------------------------
+
+  function fileNameFromPath(path) {
+    if (!path) return '';
+    var parts = path.split(/[\\/]/);
+    return parts[parts.length - 1];
+  }
+
+  function sceneTitle(scene) {
+    if (scene.title) return scene.title;
+    if (scene.files && scene.files.length) return fileNameFromPath(scene.files[0].path);
+    return '';
+  }
+
+  function imageTitleOf(image) {
+    if (image.title) return image.title;
+    if (image.visual_files && image.visual_files.length) return fileNameFromPath(image.visual_files[0].path);
+    return '';
+  }
+
+  function galleryTitleOf(gallery) {
+    if (gallery.title) return gallery.title;
+    if (gallery.files && gallery.files.length) return fileNameFromPath(gallery.files[0].path);
+    if (gallery.folder) return fileNameFromPath(gallery.folder.path);
+    return '';
+  }
+
+  function formatDuration(seconds) {
+    if (seconds === null || seconds === undefined) return '';
+    seconds = Math.round(seconds);
+    var h = Math.floor(seconds / 3600);
+    var m = Math.floor((seconds % 3600) / 60);
+    var s = seconds % 60;
+    var pad = function (n) { return n < 10 ? '0' + n : '' + n; };
+    return h > 0 ? h + ':' + pad(m) + ':' + pad(s) : m + ':' + pad(s);
+  }
+
+  function renderSelectCheckbox(id, selected, onSelectChange) {
+    return React.createElement(
+      'div',
+      { className: 'card-controls' },
+      React.createElement(
+        'label',
+        { className: 'folder-browser-card-check', onClick: function (e) { e.stopPropagation(); } },
+        React.createElement('input', {
+          type: 'checkbox',
+          checked: selected,
+          onChange: function (e) { onSelectChange(id, e.target.checked); },
+        })
+      )
+    );
+  }
+
+  function renderRatingBanner(rating100) {
+    if (!rating100) return null;
+    return React.createElement('div', { className: 'rating-banner rating-100-' + rating100 }, rating100 + '%');
+  }
+
+  function renderStudioOverlay(studio) {
+    if (!studio) return null;
+    return React.createElement(
+      'div',
+      { className: 'studio-overlay' },
+      studio.image_path
+        ? React.createElement('img', { className: 'image-thumbnail', src: studio.image_path, alt: studio.name })
+        : studio.name
+    );
+  }
+
+  function renderCardPopovers(item) {
+    var parts = [];
+    if (item.tags && item.tags.length) {
+      parts.push(React.createElement(Button, { key: 'tags', className: 'minimal', disabled: true }, React.createElement(FontAwesomeIcon, { icon: FA.faTag, className: 'fa-icon' }), React.createElement('span', null, item.tags.length)));
+    }
+    if (item.performers && item.performers.length) {
+      parts.push(React.createElement(Button, { key: 'performers', className: 'minimal', disabled: true }, React.createElement(FontAwesomeIcon, { icon: FA.faUser, className: 'fa-icon' }), React.createElement('span', null, item.performers.length)));
+    }
+    if (item.o_counter) {
+      parts.push(React.createElement(Button, { key: 'ocounter', className: 'minimal', disabled: true }, React.createElement(FontAwesomeIcon, { icon: FA.faEye, className: 'fa-icon' }), React.createElement('span', null, item.o_counter)));
+    }
+    if (item.organized) {
+      parts.push(React.createElement(Button, { key: 'organized', className: 'minimal', disabled: true }, React.createElement(FontAwesomeIcon, { icon: FA.faBox, className: 'fa-icon' })));
+    }
+    if (!parts.length) return null;
+    return React.createElement(React.Fragment, null, React.createElement('hr'), React.createElement(ButtonGroup, { className: 'card-popovers' }, parts));
+  }
+
+  var SCENE_ZOOM_WIDTHS = [280, 340, 480, 640];
+
+  function SimpleSceneCardGrid(props) {
+    return React.createElement(
+      'div',
+      { className: 'row justify-content-center' },
+      props.scenes.map(function (scene) {
+        var title = sceneTitle(scene);
+        var file = scene.files && scene.files[0];
+        var selected = props.selectedIds.has(scene.id);
+        var link = props.queue ? props.queue.makeLink(scene.id, {}) : '/scenes/' + scene.id;
+        return React.createElement(
+          Card,
+          { key: scene.id, className: 'grid-card scene-card zoom-' + props.zoomIndex, style: { width: SCENE_ZOOM_WIDTHS[props.zoomIndex] || SCENE_ZOOM_WIDTHS[1] } },
+          renderSelectCheckbox(scene.id, selected, props.onSelectChange),
+          React.createElement(
+            'div',
+            { className: 'thumbnail-section video-section' },
+            React.createElement(
+              Link,
+              { to: link, className: 'scene-card-link' },
+              React.createElement(
+                'div',
+                { className: 'scene-card-preview' },
+                React.createElement('img', { className: 'scene-card-preview-image', src: (scene.paths && scene.paths.screenshot) || '', alt: title })
+              )
+            ),
+            renderRatingBanner(scene.rating100),
+            renderStudioOverlay(scene.studio),
+            file
+              ? React.createElement(
+                  'div',
+                  { className: 'scene-specs-overlay' },
+                  React.createElement('span', { className: 'overlay-resolution' }, file.width && file.height ? file.width + 'x' + file.height : ''),
+                  React.createElement('span', { className: 'overlay-duration' }, formatDuration(file.duration))
+                )
+              : null
+          ),
+          React.createElement(
+            'div',
+            { className: 'card-section' },
+            React.createElement('h5', { className: 'card-section-title' }, title),
+            renderCardPopovers(scene)
+          )
+        );
+      })
+    );
+  }
+
+  function SimpleImageCardGrid(props) {
+    return React.createElement(
+      'div',
+      { className: 'row justify-content-center' },
+      props.images.map(function (image, index) {
+        var title = imageTitleOf(image);
+        var selected = props.selectedIds.has(image.id);
+        var source = (image.paths && (image.paths.preview || image.paths.thumbnail)) || '';
+        var isVideo = source.indexOf('preview') !== -1;
+        return React.createElement(
+          Card,
+          {
+            key: image.id,
+            className: 'grid-card image-card zoom-' + props.zoomIndex,
+            onClick: function () { props.onPreview(index); },
+          },
+          renderSelectCheckbox(image.id, selected, props.onSelectChange),
+          React.createElement(
+            'div',
+            { className: 'thumbnail-section' },
+            React.createElement(
+              'div',
+              { className: 'image-card-preview' },
+              isVideo
+                ? React.createElement('video', { className: 'image-card-preview-image', src: source, loop: true, autoPlay: true, playsInline: true })
+                : React.createElement('img', { className: 'image-card-preview-image', src: source, alt: title })
+            ),
+            renderRatingBanner(image.rating100),
+            renderStudioOverlay(image.studio)
+          ),
+          React.createElement(
+            'div',
+            { className: 'card-section' },
+            React.createElement('h5', { className: 'card-section-title' }, title),
+            renderCardPopovers(image)
+          )
+        );
+      })
+    );
+  }
+
+  function SimpleGalleryCardGrid(props) {
+    return React.createElement(
+      'div',
+      { className: 'row justify-content-center' },
+      props.galleries.map(function (gallery) {
+        var title = galleryTitleOf(gallery);
+        var selected = props.selectedIds.has(gallery.id);
+        return React.createElement(
+          Card,
+          { key: gallery.id, className: 'grid-card gallery-card zoom-' + props.zoomIndex },
+          renderSelectCheckbox(gallery.id, selected, props.onSelectChange),
+          React.createElement(
+            'div',
+            { className: 'thumbnail-section' },
+            React.createElement(
+              Link,
+              { to: '/galleries/' + gallery.id, className: 'gallery-card-header' },
+              React.createElement(
+                'div',
+                { className: 'gallery-card-cover' },
+                React.createElement('img', { className: 'gallery-card-image', src: (gallery.paths && gallery.paths.cover) || '', alt: title })
+              )
+            ),
+            renderRatingBanner(gallery.rating100),
+            renderStudioOverlay(gallery.studio)
+          ),
+          React.createElement(
+            'div',
+            { className: 'card-section' },
+            React.createElement('h5', { className: 'card-section-title' }, title),
+            React.createElement('div', { className: 'text-muted' }, gallery.image_count + (gallery.image_count === 1 ? ' image' : ' images')),
+            renderCardPopovers(gallery)
+          )
+        );
+      })
+    );
+  }
+
+  var GRID_COMPONENTS = {
+    scenes: SimpleSceneCardGrid,
+    images: SimpleImageCardGrid,
+    galleries: SimpleGalleryCardGrid,
+  };
+
+  // ---------------------------------------------------------------------
   // Content type registry - Scenes/Images/Galleries each follow the same
   // shape (find query, destroy mutation, bulk-update mutation), just with
   // different field/mutation names, so every tab is driven generically
@@ -147,7 +363,6 @@
       filterVar: 'scene_filter',
       resultKey: 'findScenes',
       itemsKey: 'scenes',
-      gridComponent: 'SceneCardGrid',
       destroyMutation: 'mutation FolderBrowserScenesDestroy($input: ScenesDestroyInput!) { scenesDestroy(input: $input) }',
       destroyResultKey: 'scenesDestroy',
       bulkUpdateMutation: 'mutation FolderBrowserBulkSceneUpdate($input: BulkSceneUpdateInput!) { bulkSceneUpdate(input: $input) { id } }',
@@ -170,7 +385,6 @@
       filterVar: 'image_filter',
       resultKey: 'findImages',
       itemsKey: 'images',
-      gridComponent: 'ImageCardGrid',
       destroyMutation: 'mutation FolderBrowserImagesDestroy($input: ImagesDestroyInput!) { imagesDestroy(input: $input) }',
       destroyResultKey: 'imagesDestroy',
       bulkUpdateMutation: 'mutation FolderBrowserBulkImageUpdate($input: BulkImageUpdateInput!) { bulkImageUpdate(input: $input) { id } }',
@@ -192,7 +406,6 @@
       filterVar: 'gallery_filter',
       resultKey: 'findGalleries',
       itemsKey: 'galleries',
-      gridComponent: 'GalleryCardGrid',
       destroyMutation: 'mutation FolderBrowserGalleryDestroy($input: GalleryDestroyInput!) { galleryDestroy(input: $input) }',
       destroyResultKey: 'galleryDestroy',
       bulkUpdateMutation: 'mutation FolderBrowserBulkGalleryUpdate($input: BulkGalleryUpdateInput!) { bulkGalleryUpdate(input: $input) { id } }',
@@ -341,15 +554,25 @@
 
   function BulkEditModal(props) {
     var useState = React.useState;
+    var useEffect = React.useEffect;
     var ratingState = useState('');
     var rating = ratingState[0];
     var setRating = ratingState[1];
     var organizedState = useState('');
     var organized = organizedState[0];
     var setOrganized = organizedState[1];
-    var tagIdsState = useState([]);
-    var tagIds = tagIdsState[0];
-    var setTagIds = tagIdsState[1];
+    // {id, name} pairs, built up from the hand-rolled tag search below
+    // rather than the native TagSelect component (see the note on
+    // GRID_COMPONENTS - same cold-load problem, same fix).
+    var selectedTagsState = useState([]);
+    var selectedTags = selectedTagsState[0];
+    var setSelectedTags = selectedTagsState[1];
+    var tagSearchState = useState('');
+    var tagSearch = tagSearchState[0];
+    var setTagSearch = tagSearchState[1];
+    var tagResultsState = useState([]);
+    var tagResults = tagResultsState[0];
+    var setTagResults = tagResultsState[1];
     var busyState = useState(false);
     var busy = busyState[0];
     var setBusy = busyState[1];
@@ -357,13 +580,47 @@
     var error = errorState[0];
     var setError = errorState[1];
 
-    var TagSelect = PluginApi.components.TagSelect;
+    useEffect(
+      function () {
+        if (!tagSearch.trim()) {
+          setTagResults([]);
+          return;
+        }
+        var cancelled = false;
+        var timer = setTimeout(function () {
+          getApolloClient()
+            .query({
+              query: GQL.FindTagsDocument,
+              variables: { filter: { q: tagSearch.trim(), per_page: 10, sort: 'name', direction: 'ASC' } },
+              fetchPolicy: 'network-only',
+            })
+            .then(function (result) {
+              if (!cancelled) setTagResults(result.data.findTags.tags);
+            });
+        }, 300);
+        return function () {
+          cancelled = true;
+          clearTimeout(timer);
+        };
+      },
+      [tagSearch]
+    );
+
+    function addTag(tag) {
+      setSelectedTags(selectedTags.concat([tag]));
+      setTagSearch('');
+      setTagResults([]);
+    }
+
+    function removeTag(id) {
+      setSelectedTags(selectedTags.filter(function (t) { return t.id !== id; }));
+    }
 
     function handleApply() {
       var edits = {};
       if (rating !== '') edits.rating100 = Math.max(0, Math.min(100, Number(rating)));
       if (organized !== '') edits.organized = organized === 'yes';
-      if (tagIds.length) edits.addTagIds = tagIds;
+      if (selectedTags.length) edits.addTagIds = selectedTags.map(function (t) { return t.id; });
       if (!Object.keys(edits).length) {
         setError('Change at least one field before applying.');
         return;
@@ -418,9 +675,45 @@
           Form.Group,
           null,
           React.createElement(Form.Label, null, 'Add tags'),
-          TagSelect
-            ? React.createElement(TagSelect, { ids: tagIds, isMulti: true, onSelect: function (items) { setTagIds(items.map(function (i) { return i.id; })); } })
-            : React.createElement(Alert, { variant: 'warning' }, 'Tag picker is not loaded yet - visit the Tags page once, then come back here.')
+          selectedTags.length
+            ? React.createElement(
+                'div',
+                { className: 'folder-browser-tag-chips' },
+                selectedTags.map(function (t) {
+                  return React.createElement(
+                    'span',
+                    { key: t.id, className: 'folder-browser-tag-chip' },
+                    t.name,
+                    React.createElement(
+                      Button,
+                      { variant: 'link', className: 'folder-browser-tag-chip-remove', onClick: function () { removeTag(t.id); } },
+                      React.createElement(FontAwesomeIcon, { icon: FA.faTimes, className: 'fa-icon' })
+                    )
+                  );
+                })
+              )
+            : null,
+          React.createElement(Form.Control, {
+            type: 'text',
+            placeholder: 'Search tags by name…',
+            value: tagSearch,
+            onChange: function (e) { setTagSearch(e.target.value); },
+          }),
+          tagResults.length
+            ? React.createElement(
+                'div',
+                { className: 'folder-browser-tag-results' },
+                tagResults
+                  .filter(function (t) { return !selectedTags.some(function (s) { return s.id === t.id; }); })
+                  .map(function (t) {
+                    return React.createElement(
+                      Button,
+                      { key: t.id, variant: 'secondary', size: 'sm', className: 'folder-browser-tag-result', onClick: function () { addTag(t); } },
+                      t.name
+                    );
+                  })
+              )
+            : null
         )
       ),
       React.createElement(
@@ -442,12 +735,6 @@
 
     var location = useLocation();
     var currentPath = new URLSearchParams(location.search).get('path') || '';
-
-    // true until SceneCardGrid/ImageCardGrid/GalleryCardGrid/Pagination/
-    // TagSelect have all been loaded (see COMPONENT_LOADERS above) -
-    // folded into the loading spinner below so a cold visit to this page
-    // never shows the "not loaded yet" fallback warnings in normal use.
-    var componentsLoading = useLoadComponents(COMPONENT_LOADERS);
 
     var tabState = useState('scenes');
     var activeTab = tabState[0];
@@ -763,18 +1050,11 @@
     }
 
     function renderPagination() {
-      var Pagination = PluginApi.components.Pagination;
-      if (Pagination) {
-        return React.createElement(Pagination, {
-          itemsPerPage: PAGE_SIZE,
-          currentPage: page,
-          totalItems: itemsResult.count,
-          onChangePage: function (p) { setPage(p); },
-          metadataByline: itemsResult.count + ' ' + (itemsResult.count === 1 ? CONTENT_TYPES[activeTab].label.replace(/s$/, '') : CONTENT_TYPES[activeTab].label),
-        });
-      }
-      // Fallback, in case Pagination hasn't been loaded into
-      // PluginApi.components yet in this session.
+      // Hand-rolled rather than reusing the native Pagination component -
+      // see the "Why this page builds its own card grids" note in the
+      // README: anything reached only through PluginApi.components has the
+      // same cold-load problem the grids did, so this page doesn't depend
+      // on that registry for anything anymore.
       var totalPages = Math.max(1, Math.ceil(itemsResult.count / PAGE_SIZE));
       return React.createElement(
         'div',
@@ -790,14 +1070,11 @@
       // itemsResult can still hold the PREVIOUS tab's items for one render
       // right after switching tabs, before the new tab's fetch resolves -
       // handing those to this tab's grid component would crash it (e.g. a
-      // real image passed to SceneCardGrid, which expects scene.files).
+      // real image passed to SimpleSceneCardGrid, which expects scene.files).
       if (itemsResult.tab !== activeTab) {
         return React.createElement(Spinner, { animation: 'border', className: 'mt-3' });
       }
-      var GridComponent = PluginApi.components[config.gridComponent];
-      if (!GridComponent) {
-        return React.createElement(Alert, { variant: 'warning' }, config.gridComponent + ' is not loaded yet - visit the ' + config.label + ' page once, then come back here.');
-      }
+      var GridComponent = GRID_COMPONENTS[activeTab];
       if (!itemsResult.items.length) {
         var emptyMessage = searchQuery
           ? 'No ' + config.label.toLowerCase() + ' matching "' + searchQuery + '" directly in this folder.'
@@ -815,15 +1092,12 @@
         gridProps.queue = makeSceneQueue(itemsResult.items.map(function (s) { return s.id; }));
       } else if (activeTab === 'images') {
         gridProps.images = itemsResult.items;
-        // Matches the native Images page: ImageCardGrid calls
-        // onPreview(index, ev) for the hover "preview" (magnifying glass)
-        // button specifically - preventDefault() stops that click's bubble
-        // from also triggering the card's own link to the image's detail
-        // page. Clicking the rest of the card still goes to the detail
-        // page, same as the native page.
-        gridProps.onPreview = function (index, ev) {
+        // Unlike the native Images page (card click -> detail page, a
+        // separate hover "preview" button -> lightbox), the whole card
+        // opens the lightbox here - there's no hand-rolled image detail
+        // page to link to, and the lightbox is the more useful default.
+        gridProps.onPreview = function (index) {
           showLightbox({ initialIndex: index });
-          if (ev && ev.preventDefault) ev.preventDefault();
         };
       } else {
         gridProps.galleries = itemsResult.items;
@@ -853,7 +1127,7 @@
             React.createElement('div', { className: 'folder-browser-toolbar' }, renderSearchBox(), renderSortControl())
           )
         : null,
-      loading || componentsLoading
+      loading
         ? React.createElement(Spinner, { animation: 'border', className: 'mt-3' })
         : React.createElement(
             React.Fragment,

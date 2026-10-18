@@ -134,3 +134,35 @@
   margin: 0.5rem 0 1.5rem;
   opacity: 0.8;
 }
+
+.folder-browser-card-check {
+  margin: 0;
+}
+
+.folder-browser-tag-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-bottom: 0.5rem;
+}
+
+.folder-browser-tag-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.15rem 0.5rem;
+  border-radius: 1rem;
+  background: rgba(255, 255, 255, 0.12);
+  font-size: 0.85rem;
+}
+
+.folder-browser-tag-chip-remove {
+  padding: 0 0.15rem;
+}
+
+.folder-browser-tag-results {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-top: 0.5rem;
+}

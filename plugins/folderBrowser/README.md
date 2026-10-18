@@ -3,8 +3,10 @@
 Adds a **Folders** item to the main nav bar (alongside Scenes, Images, Groups, ...)
 leading to a page for navigating your library by folder, like a file explorer -
 browse into subfolders and see the scenes, images, and galleries directly
-inside each one, rendered using the exact same card-grid components as the
-native Scenes/Images/Galleries pages.
+inside each one. Card tiles are hand-rolled (not the native
+`SceneCardGrid`/etc. components - see "Why this page builds its own card
+grids" below) but built from the same GraphQL data and reuse Stash's own CSS
+classes, so they look and feel consistent with the native pages.
 
 Pure frontend plugin - no Python backend, no settings. Everything is read-only
 GraphQL queries, except the bulk Edit/Delete actions described below, which
@@ -32,9 +34,8 @@ use the same mutations the native bulk-selection toolbar uses.
 - Scene cards get a real queue, so opening one and finishing it auto-advances
   to the next scene in that folder listing, the same as queuing up the native
   Scenes page.
-- Pagination uses the native `Pagination` component (page-jump control, item
-  count byline), falling back to simple Previous/Next buttons only if that
-  component hasn't been loaded into `PluginApi.components` yet this session.
+- Pagination is a simple hand-rolled Previous/Next control with a page/count
+  indicator (see "Why this page builds its own card grids" below).
 - A search box filters the active tab's content to this folder using Stash's
   own free-text search (the same `filter.q` the native search bar writes to),
   debounced so it doesn't query on every keystroke.
@@ -44,12 +45,10 @@ use the same mutations the native bulk-selection toolbar uses.
 - Folder tiles and breadcrumb crumbs are real links (`react-router-dom`'s
   `Link`, not `onClick`-only buttons), so ctrl/cmd/middle-click opens a
   folder in a new tab, same as any other link in the app.
-- Clicking an image's hover "preview" (magnifying-glass) button opens it in
-  the native lightbox, with left/right navigation across the current page's
-  images - matching the native Images page exactly (clicking the rest of the
-  card still goes to the image's own detail page there too, since that's
-  baked into the reused `ImageCardGrid`/`GridCard` markup, not something
-  this plugin controls).
+- Clicking an image card opens it in the native lightbox (left/right
+  navigation across the current page's images), rather than a detail page -
+  there's no hand-rolled image detail page to link to, and the lightbox is
+  more useful as the default here anyway.
 
 ## Why it needed more than a simple path filter
 
@@ -81,9 +80,8 @@ via `PluginApi.components`. In practice it can't be reused here:
 - It's driven by a `ListFilterModel` instance and `Criterion` subclasses
   (`PathCriterion`, `TagsCriterion`, ...) from `src/models/list-filter/`, plus
   a `View` enum used for persisting filter state - none of these classes are
-  exposed on `PluginApi` (only plain data/presentational pieces like
-  `SceneCardGrid` and `Pagination` are), so there's no supported way to hand
-  it "show me exactly this folder" from plugin JS.
+  exposed on `PluginApi`, so there's no supported way to hand it "show me
+  exactly this folder" from plugin JS.
 - Even if that were solved, the container pulls in a large chunk of the app -
   `EditScenesDialog`, `DeleteScenesDialog`, the Tagger, Generate/Export
   dialogs, the full filter sidebar - all at once. Given this plugin install
@@ -97,33 +95,48 @@ So: real data, real card components, real pagination - just a hand-built
 toolbar instead of the real one, which is intentionally lighter-weight than
 replicating the native filter sidebar.
 
-## Reused native components (why this looks like the real Scenes/Images/Galleries pages)
+## Why this page builds its own card grids
 
-- **`SceneCardGrid`**, **`ImageCardGrid`**, and **`GalleryCardGrid`** are all
-  registered `PatchComponent`s, so they're reachable from plugin JS via
-  `PluginApi.components.<Name>` - the exact same components the native pages
-  use, so tiles look and behave identically (thumbnails, hover overlay,
-  rating, o-counter, duration, click to open, ...). Similarly, `Pagination`
-  and `TagSelect` (used in the bulk Edit dialog's "Add tags" field) are reused
-  the same way.
-- Those five components only get registered into `PluginApi.components` once
-  their defining module is actually evaluated somewhere - normally the first
-  time you visit the matching native page in the same session. On a cold
-  visit to this page (new tab, bookmark, first page opened this session)
-  they wouldn't be loaded yet. This page forces them to load itself, via
-  `PluginApi.hooks.useLoadComponents([...])` with the `SceneList`, `Images`,
-  `Galleries`, and `Tags` entries from `PluginApi.loadableComponents` (NOT
-  `Scenes` - `Scenes.tsx` only lazy-wraps `SceneList` rather than importing
-  it directly, so requesting it doesn't actually load `SceneCardGrid`/
-  `Pagination`), and shows the same loading spinner used for data fetches
-  while that resolves - so cold visits get the real grids immediately
-  instead of a "not loaded yet, visit the X page first" warning.
-- Content data comes from Stash's own compiled query documents
-  (`GQL.FindScenesDocument`/`FindImagesDocument`/`FindGalleriesDocument`), run
-  through the app's real Apollo Client (`PluginApi.utils.StashService.getClient()`),
-  rather than hand-built queries. That guarantees the returned data has
-  exactly the shape each grid component expects, with no risk of missing a
-  field it needs.
+Earlier versions of this plugin reused the native `SceneCardGrid`/
+`ImageCardGrid`/`GalleryCardGrid`/`Pagination`/`TagSelect` components via
+`PluginApi.components.<Name>` - real `PatchComponent`s, technically reachable
+from plugin JS. The problem: those only get *registered* into that object
+once their defining module has actually been evaluated somewhere, normally
+by visiting the matching native page first in the same session. On a cold
+visit to this page (new tab, bookmark, first page opened all session) they
+simply weren't there yet, and the page fell back to a "not loaded yet, visit
+the X page first" warning.
+
+Forcing the lazy chunks to load via `PluginApi.hooks.useLoadComponents(...)`
+(what this plugin tried first) didn't reliably fix it in practice. Looking at
+how `.tmp/stash-tv` (a separate, much larger Stash-adjacent project in this
+repo) solves the exact same problem was the deciding factor: it doesn't
+touch `PluginApi.components` *at all*. It's technically a Stash plugin too,
+but the actual UI is a fully separate app with its own React root, built by
+vendoring a pinned copy of Stash's source and compiling it directly into its
+own bundle - and even then, it doesn't reuse the native card components,
+building its own slide/card UI from raw GraphQL data instead. That's the
+model this page now follows, at plugin scale: build simple cards from data
+this page is fetching anyway, rather than depend on the native app's
+lazily-loaded component registry for anything. The trade-off is simpler and
+more reliable (no more cold-load race, no more build pipeline needed either)
+at the cost of being a simplified visual subset of the real cards (see
+"Notes / current limitations").
+
+What's still genuinely reused, because it doesn't have this problem:
+
+- **CSS classes** - `grid-card`, `scene-card`/`image-card`/`gallery-card`,
+  `zoom-N`, `rating-banner`, `studio-overlay`, `scene-specs-overlay`,
+  `card-popovers`, `row.justify-content-center`, etc. Stash's global
+  stylesheet is always loaded regardless of code-splitting (only the React
+  *components* are code-split, not the CSS), so hand-rolled markup using
+  these same classes still looks visually consistent with the native app.
+- **GraphQL data** - content still comes from Stash's own compiled query
+  documents (`GQL.FindScenesDocument`/`FindImagesDocument`/
+  `FindGalleriesDocument`/`FindTagsDocument`), run through the app's real
+  Apollo Client (`PluginApi.utils.StashService.getClient()`), not hand-built
+  queries - this never had the lazy-loading problem, since compiled
+  documents and the Apollo Client are both present from the start.
 - The **Folders** nav link is injected via
   `PluginApi.patch.before("MainNavBar.MenuItems", ...)` - a real
   `PatchComponent` that just renders `<Nav>{children}</Nav>` - by appending
@@ -133,16 +146,17 @@ replicating the native filter sidebar.
 - The scene queue is a plain object shaped like `SceneQueue`
   (`makeLink(sceneID, options)`), built from the current folder listing's
   scene IDs in the same `?qs=<id>&qs=<id>...` URL format `SceneQueue.fromSceneIDList()`
-  produces - `SceneQueue` itself isn't exposed via `PluginApi`, but `SceneCard`
-  only ever calls `queue.makeLink()`, so this is enough for "continue to next
-  scene" playback to work identically to the native Scenes page.
+  produces - `SceneQueue` itself isn't exposed via `PluginApi`, but the hand-rolled
+  scene card only ever calls `queue.makeLink()`, so this is enough for
+  "continue to next scene" playback to work identically to the native Scenes
+  page.
 - `itemsResult` is tagged with the tab it was fetched for. Switching tabs
   re-renders with the new `activeTab` before that tab's refetch resolves, so
   without the tag, the grid for the new tab would briefly be handed the old
-  tab's items (e.g. images passed into `SceneCardGrid`, which indexes into
-  `scene.files` and isn't shaped to tolerate that) - that crashes during
-  render/commit, before any effect gets a chance to clean the stale state up,
-  so it has to be guarded at render time instead.
+  tab's items (e.g. images passed into the hand-rolled scene card, which
+  indexes into `scene.files` and isn't shaped to tolerate that) - that could
+  still render wrong/broken content during the gap, so it has to be guarded
+  at render time rather than cleaned up afterwards by an effect.
 - The lightbox is driven by `PluginApi.hooks.useLightbox` (the exact hook the
   native Images page uses - see `src/components/Images/ImageList.tsx`), fed
   `itemsResult.items` only while actually on the Images tab (and only once
@@ -153,12 +167,19 @@ replicating the native filter sidebar.
 ## Notes / current limitations
 
 - Bulk Edit is a simplified subset of the native Edit dialog - Rating,
-  Organized, and adding tags - not full parity (e.g. no removing tags, no
-  performers/studio editing). The real `EditScenesDialog`/`DeleteScenesDialog`
-  aren't registered `PatchComponent`s, so they're not reachable via
-  `PluginApi.components` at all; this reimplements just the common case
-  directly against the `bulkSceneUpdate`/`bulkImageUpdate`/`bulkGalleryUpdate`
-  mutations.
+  Organized, and adding tags (via a small hand-rolled search-as-you-type
+  picker against `GQL.FindTagsDocument`, not the native `TagSelect`) - not
+  full parity (e.g. no removing tags, no performers/studio editing). The real
+  `EditScenesDialog`/`DeleteScenesDialog` aren't registered `PatchComponent`s
+  at all, so this reimplements just the common case directly against the
+  `bulkSceneUpdate`/`bulkImageUpdate`/`bulkGalleryUpdate` mutations.
+- Cards are a simplified visual subset of the real ones: thumbnail, title,
+  rating, studio name/logo, tag/performer/o-counter/organized counts (as
+  plain counts, not the native hover popovers listing names), and for
+  scenes, resolution + duration. No hover-preview scrubbing, no interactive
+  heatmap, no file-path display, no click-through from the studio badge or
+  the count badges (the native versions link to the studio page / open a
+  popover of names - these are display-only here).
 - The nav bar patch is wrapped in a try/catch that falls back to the
   unmodified nav bar on any error, so a problem here can never take down
   every page - see `filemonitor`/`moveFile`'s equivalent patches for the same
