@@ -20,7 +20,16 @@
   var getApolloClient = PluginApi.utils.StashService.getClient;
   var useLightbox = PluginApi.hooks.useLightbox;
 
-  var ROUTE_PATH = '/plugin/folder-browser';
+  // Deliberately NOT under /plugin/... - the Go backend mounts a dedicated
+  // router at that prefix (internal/api/routes_plugin.go, serving each
+  // plugin's javascript/css/assets) that only matches /plugin/{id}/javascript,
+  // /css, and /assets - a bare /plugin/<anything-else> 404s from THAT router
+  // before the request ever reaches the SPA's catch-all handler that would
+  // serve index.html (internal/api/server.go's r.HandleFunc("/*", ...)).
+  // That 404 happens server-side, so no amount of fixing this plugin's own
+  // JS can work around it - a direct/hard navigation to a /plugin/... route
+  // this plugin registers will always 404 before React even loads.
+  var ROUTE_PATH = '/folder-browser';
   var PAGE_SIZE = 40;
 
   // ---------------------------------------------------------------------

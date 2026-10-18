@@ -12,7 +12,7 @@ use the same mutations the native bulk-selection toolbar uses.
 
 ## How it works
 
-- At the root (`/plugin/folder-browser`, no `path` in the URL) it shows your
+- At the root (`/folder-browser`, no `path` in the URL) it shows your
   configured library paths as top-level "drives" to pick from, the same idea as
   "This PC" in Windows Explorer.
 - Picking a folder shows its direct subfolders as clickable tiles, a breadcrumb
@@ -153,31 +153,27 @@ replicating the native filter sidebar.
   defensive pattern, adopted project-wide after an earlier plugin install
   caused an app-wide crash.
 
-## Hard-reloading / opening `/plugin/folder-browser` directly in a new tab
+## Why the page is at `/folder-browser`, not `/plugin/folder-browser`
 
-If this doesn't work reliably for you, it isn't something this plugin's own
-code controls, and per Stash's actual loading code it's not expected to fail:
+It used to register its frontend route at `/plugin/folder-browser`, which
+worked when navigated to from inside the already-loaded app (clicking the
+**Folders** nav link) but 404'd on a hard reload or when opened directly in a
+new tab. The cause turned out to be server-side, not anything about plugin
+JS loading order: the Go backend mounts a dedicated router at the `/plugin`
+prefix (`internal/api/routes_plugin.go`, via `r.Mount("/plugin", ...)` in
+`internal/api/server.go`) that serves each plugin's own assets - it only has
+handlers for `/plugin/{id}/javascript`, `/plugin/{id}/css`, and
+`/plugin/{id}/assets`. A `Mount` fully delegates any request under that
+prefix to its sub-router, so a bare `/plugin/folder-browser` (no matching
+sub-route) 404s from *that* router - before the request ever reaches the
+SPA's catch-all handler (`r.HandleFunc("/*", ...)` in `server.go`) that
+would otherwise serve `index.html` and let React Router take over. No amount
+of fixing this plugin's own `.js` could work around that, since the request
+never got far enough to run any JS at all.
 
-- Plugin `.js`/`.css` files are injected as `<script>`/`<link>` tags by a
-  `useEffect` after the app starts mounting (`src/hooks/useScript.tsx`), but
-  the app deliberately renders only a loading spinner - not the route table,
-  not this page - until *every* plugin script has fired its `load` event
-  (`PluginsLoader` in `src/plugins.tsx`). This gate exists specifically so a
-  route a plugin registers is available by the time anything tries to match
-  against it, and it applies identically no matter which URL the tab started
-  on - there's nothing route-specific here that would make a direct
-  hard-load of `/plugin/folder-browser` behave differently from a hard-load
-  of `/`.
-- A real bug in that loader *could* produce exactly this symptom, though:
-  `useScript.tsx` treats a script's `error` event the same as its `load`
-  event, so if a plugin `.js` file 404s, fails to parse, or is blocked for
-  any reason on a given page load, the app silently finishes "loading" and
-  renders anyway - with that plugin's route never registered, and no visible
-  error. If you can reproduce this, check the Network tab on a failing hard
-  load for a non-200 response (or unusually slow/timed-out request) for this
-  plugin's `.js` file, and check the browser console for an error that got
-  swallowed by this.
-- This is Stash-core behavior (`src/plugins.tsx`, `src/hooks/useScript.tsx`),
-  not something a plugin's own `.js` file can work around - fixing the
-  underlying bug means patching and rebuilding Stash's own frontend, which is
-  out of scope for a plugin living in this repo.
+The fix was simply to register the page somewhere that isn't under
+`/plugin/...` - `/folder-browser` doesn't collide with that mount or with
+any native route (`/scenes`, `/images`, `/performers`, ... - see
+`ui/v2.5/src/App.tsx`), so it falls through to the SPA catch-all correctly on
+a direct load. Any future Stash plugin route should avoid the `/plugin/...`
+prefix for the same reason.
