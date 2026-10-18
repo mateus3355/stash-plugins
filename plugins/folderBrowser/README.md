@@ -146,6 +146,21 @@ as every earlier version of this plugin.
 
 A couple of consequences worth knowing:
 
+- `PluginApi.hooks.useLightbox`'s internal effect is keyed on its `images`
+  argument **by reference**, not by value (see
+  `src/hooks/Lightbox/hooks.ts`). Passing an inline `[]` literal for "no
+  images right now" (rather than a stable module-level constant) is a fresh
+  array every render, so that effect never stops seeing it as "changed" -
+  it fires every render, which (like any React context update) re-renders
+  this page as a descendant of `LightboxProvider`, triggering another
+  render with another fresh `[]`, forever. This is a real bug this plugin
+  shipped with at one point - visible as the search box not accepting
+  keystrokes and the sort dropdown visibly reverting right after a
+  selection, both because the render loop kept re-running the tab/folder
+  reset effect. `EMPTY_ARRAY` (a module-level constant) is used for both of
+  `useLightbox`'s array arguments for this reason - any other hook/effect
+  this page ever reads state from should get the same scrutiny for
+  reference-stability if it depends on an array/object field.
 - Two React Contexts the real components depend on
   (`useConfigurationContext`, `useToast`) are recreated fresh inside this
   bundle's own compiled copy of `src/hooks/Config`/`src/hooks/Toast` - they

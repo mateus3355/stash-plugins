@@ -30,6 +30,19 @@ const FA = PluginApi.libraries.FontAwesomeSolid;
 const getApolloClient = PluginApi.utils.StashService.getClient;
 const useLightbox = PluginApi.hooks.useLightbox;
 
+// useLightbox's internal effect depends on `images` (its first argument's
+// `images` field) by reference (see src/hooks/Lightbox/hooks.ts), so an
+// inline `[]` literal for "no images right now" would be a fresh array
+// every render - the effect would never stop seeing it as "changed",
+// firing setLightboxState every render, which (like any React context
+// update) re-renders this page as a descendant of LightboxProvider, which
+// renders again with another fresh `[]`... an infinite render loop. A
+// module-level constant is a stable reference. Also reused for the second
+// (chapters) argument, which the hook's returned callback's own identity
+// depends on - not a render-loop risk the way `images` is, but unstable
+// for no reason otherwise.
+const EMPTY_ARRAY: any[] = [];
+
 // Deliberately NOT under /plugin/... - the Go backend mounts a dedicated
 // router at that prefix (internal/api/routes_plugin.go, serving each
 // plugin's javascript/css/assets) that only matches /plugin/{id}/javascript,
@@ -417,11 +430,11 @@ function FolderBrowserPage() {
   // leave it primed with stale images.
   const showLightbox = useLightbox(
     {
-      images: activeTab === "images" && itemsResult.tab === "images" ? itemsResult.items : [],
+      images: activeTab === "images" && itemsResult.tab === "images" ? itemsResult.items : EMPTY_ARRAY,
       showNavigation: true,
       slideshowEnabled: false,
     },
-    []
+    EMPTY_ARRAY
   );
 
   // Library root picker only needs loading once.

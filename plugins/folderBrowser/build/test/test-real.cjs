@@ -150,6 +150,21 @@ async function run() {
     return Promise.reject(new Error('unhandled fetch: ' + q));
   };
 
+  // Real LightboxProvider stand-in: setLightboxState updates state here,
+  // which (like any React context value update) re-renders every
+  // descendant that reads this context - including, transitively, the
+  // Folder Browser page mounted below it, exactly like the real app's
+  // component tree (LightboxProvider wraps the routed content near the
+  // app root - see ui/v2.5/src/App.tsx).
+  window.__LightboxContext = React.createContext(null);
+  window.__lightboxProviderRenderCount = 0;
+  function LightboxProviderMock({ children }) {
+    window.__lightboxProviderRenderCount++;
+    const [, forceUpdate] = React.useState(0);
+    const setLightboxState = React.useCallback(() => { forceUpdate((n) => n + 1); }, []);
+    return React.createElement(window.__LightboxContext.Provider, { value: { setLightboxState } }, children);
+  }
+
   window.PluginApi = {
     React, ReactDOM,
     libraries: {
@@ -161,9 +176,26 @@ async function run() {
       StashService: { getClient: () => apolloClient },
     },
     hooks: {
-      useLightbox: (state) => {
-        window.__lastLightboxState = state;
-        return (props) => { window.__lightboxShowCalls = window.__lightboxShowCalls || []; window.__lightboxShowCalls.push(props); };
+      // Faithful to the real hook (src/hooks/Lightbox/hooks.ts): an
+      // internal useEffect keyed on individual state fields (NOT the
+      // wrapper object's identity) calls setLightboxState, which here -
+      // like the real LightboxProvider context - re-renders every
+      // descendant that reads the context, same as any React context
+      // update would. A naive mock that skips this effect (just recording
+      // the latest state) can never catch a caller passing an unstable
+      // reference (e.g. a fresh `[]` literal every render) for a field
+      // this effect depends on - that's exactly the bug this exists to
+      // catch.
+      useLightbox: (state, chapters) => {
+        const { setLightboxState } = React.useContext(window.__LightboxContext);
+        React.useEffect(() => {
+          window.__lightboxEffectRunCount = (window.__lightboxEffectRunCount || 0) + 1;
+          setLightboxState({ images: state.images, showNavigation: state.showNavigation, slideshowEnabled: state.slideshowEnabled });
+        }, [setLightboxState, state.images, state.showNavigation, state.pageCallback, state.page, state.pages, state.pageSize, state.totalCount, state.slideshowEnabled, state.onClose]);
+        return React.useCallback((props) => {
+          window.__lightboxShowCalls = window.__lightboxShowCalls || [];
+          window.__lightboxShowCalls.push(props);
+        }, [setLightboxState]);
       },
     },
     register: { route: (path, component) => { window.__registeredPath = path; window.__registeredComponent = component; } },
@@ -192,7 +224,7 @@ async function run() {
         React.createElement(
           ReactRouterDOM.MemoryRouter,
           { initialEntries: [initialPath] },
-          children
+          React.createElement(LightboxProviderMock, null, children)
         )
       )
     );
@@ -223,6 +255,20 @@ async function run() {
 
   await new Promise((r) => setTimeout(r, 50));
   console.log('D) page rendered without crashing');
+  // Regression guard for the render-loop bug: useLightbox's internal effect
+  // is keyed on `images` by reference - an inline `[]` literal passed on
+  // every render (instead of a stable module-level constant) made this
+  // effect think `images` changed every single render, re-rendering the
+  // page forever via the LightboxProvider context update. A bounded count
+  // here (not continuing to climb) proves that's actually fixed, not just
+  // "didn't time out this run".
+  const effectRunsAfterInitialRender = window.__lightboxEffectRunCount;
+  await new Promise((r) => setTimeout(r, 200));
+  console.log(
+    'D2) useLightbox effect count is bounded, not still climbing:',
+    effectRunsAfterInitialRender < 10 && window.__lightboxEffectRunCount === effectRunsAfterInitialRender,
+    { afterInitialRender: effectRunsAfterInitialRender, after200msMore: window.__lightboxEffectRunCount }
+  );
   console.log('E) real SceneCardGrid rendered scene cards:', container.querySelectorAll('.scene-card').length === 2);
   console.log('F) scene titles shown:', container.textContent.includes('Scene One') && container.textContent.includes('Scene Two'));
   console.log('G) rating banner rendered for Scene One (real RatingBanner):', container.textContent.includes('80%') || !!container.querySelector('.rating-banner'));
@@ -239,6 +285,11 @@ async function run() {
   const searchCall = apolloCalls.filter((c) => c.name === 'FindScenes').pop();
   console.log('K) typing in the real search input sent filter.q="One":', searchCall && searchCall.variables.filter.q === 'One');
   console.log('L) only matching scene shown after search:', container.textContent.includes('Scene One') && !container.textContent.includes('Scene Two'));
+  // The exact user-reported symptom: the render-loop bug made the search
+  // input's own displayed value snap back (since each cascade render
+  // re-synced the controlled input from state captured in a stale
+  // closure). Confirm what's typed is still what's shown.
+  console.log('L2) search input still shows what was typed (not reset):', container.querySelector('.folder-browser-search-input').value === 'One');
 
   await TestUtils.act(async () => {
     TestUtils.Simulate.change(searchInput, { target: { value: '' } });
@@ -254,6 +305,13 @@ async function run() {
   });
   const sortCall = apolloCalls.find((c) => c.name === 'FindScenes');
   console.log('M) changing the real sort select sent filter.sort="title":', sortCall && sortCall.variables.filter.sort === 'title');
+  // Other half of the user-reported symptom: selecting "Title" visibly
+  // flashed then reverted to "Path" - same render-loop root cause as the
+  // search input issue above, re-firing the tab/folder-change reset
+  // effect (which resets sort back to the tab's default) on every
+  // cascade render. Confirm the selection actually sticks after a beat.
+  await new Promise((r) => setTimeout(r, 200));
+  console.log('M2) sort select still shows "title" after a beat (did not revert to "path"):', sortSelect.value === 'title');
 
   // Switch to Images tab
   const tabs = Array.from(container.querySelectorAll('.nav-link, a.nav-link, [role="tab"]'));
