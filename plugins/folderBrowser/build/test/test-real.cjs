@@ -53,7 +53,10 @@ async function run() {
     '/lib/A': {
       id: '2', path: '/lib/A', basename: 'A',
       parent_folders: [{ id: '1', path: '/lib', basename: 'lib' }],
-      sub_folders: [],
+      sub_folders: [
+        { id: '3', path: '/lib/A/Amadores', basename: 'Amadores' },
+        { id: '4', path: '/lib/A/Pro', basename: 'Pro' },
+      ],
     },
   };
   const scenesByPath = [
@@ -275,6 +278,10 @@ async function run() {
   console.log('H) search box present:', !!container.querySelector('.folder-browser-search-input'));
   console.log('I) sort select present:', !!container.querySelector('.folder-browser-sort-select'));
   console.log('J) real Pagination component rendered:', !!container.querySelector('.pagination') || container.textContent.includes('Scenes'));
+  console.log(
+    'J2) subfolder tiles rendered for Amadores and Pro:',
+    container.textContent.includes('Amadores') && container.textContent.includes('Pro')
+  );
 
   // Search typing
   const searchInput = container.querySelector('.folder-browser-search-input');
@@ -290,6 +297,22 @@ async function run() {
   // re-synced the controlled input from state captured in a stale
   // closure). Confirm what's typed is still what's shown.
   console.log('L2) search input still shows what was typed (not reset):', container.querySelector('.folder-browser-search-input').value === 'One');
+  // Subfolders are filtered client-side by the same search box, so a term matching no folder name hides them too -
+  // this doesn't need the 450ms debounce wait since it's not a server round-trip.
+  console.log(
+    'L3) non-matching search also hides subfolder tiles (Amadores/Pro):',
+    !container.textContent.includes('Amadores') && !container.textContent.includes('Pro')
+  );
+
+  // The bug this plugin had: the search box only filtered scenes/images/galleries, never the subfolder tiles - typing
+  // a folder's name (e.g. "ama" for "Amadores") did nothing to them.
+  await TestUtils.act(async () => {
+    TestUtils.Simulate.change(searchInput, { target: { value: 'ama' } });
+  });
+  console.log(
+    'L4) typing a folder name filters subfolder tiles too (shows Amadores, hides Pro):',
+    container.textContent.includes('Amadores') && !container.textContent.includes('Pro')
+  );
 
   await TestUtils.act(async () => {
     TestUtils.Simulate.change(searchInput, { target: { value: '' } });

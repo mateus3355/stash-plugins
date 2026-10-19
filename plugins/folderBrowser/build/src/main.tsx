@@ -575,9 +575,14 @@ function FolderBrowserPage() {
 
   function renderSubFolders() {
     if (!folder || !folder.sub_folders || !folder.sub_folders.length) return null;
+    // Subfolders are already loaded client-side (unlike scenes/images/galleries, which are paged from the server),
+    // so filter them by the search box directly - no need to wait for the debounced searchQuery.
+    const query = searchInput.trim().toLowerCase();
+    const matches = query ? folder.sub_folders.filter((f) => f.basename.toLowerCase().includes(query)) : folder.sub_folders;
+    if (!matches.length) return null;
     return (
       <div className="folder-browser-tiles">
-        {folder.sub_folders
+        {matches
           .slice()
           .sort((a, b) => a.basename.localeCompare(b.basename))
           .map((f) => (
@@ -616,7 +621,7 @@ function FolderBrowserPage() {
         <Form.Control
           type="text"
           className="folder-browser-search-input"
-          placeholder={"Search " + CONTENT_TYPES[activeTab].label.toLowerCase() + " in this folder…"}
+          placeholder={"Search folders and " + CONTENT_TYPES[activeTab].label.toLowerCase() + "…"}
           value={searchInput}
           onChange={(e: any) => setSearchInput(e.target.value)}
         />
