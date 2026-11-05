@@ -14,7 +14,7 @@ declare global {
 
 const { PluginApi } = window;
 const { React } = PluginApi;
-const { useState, useEffect } = React;
+const { useState, useEffect, useRef } = React;
 const Bootstrap = PluginApi.libraries.Bootstrap;
 const { Nav, Button, Form, ProgressBar, Alert, Badge } = Bootstrap;
 const { NavLink } = PluginApi.libraries.ReactRouterDOM;
@@ -146,7 +146,11 @@ function TranscriberPage({ libraryPaths }: { libraryPaths: string[] }) {
 
   // The folder/language form - seeded once from the service's current config (the first poll
   // that returns one), then left alone so typing/picking here never gets clobbered by a later
-  // poll overwriting it mid-edit.
+  // poll overwriting it mid-edit. The "already seeded" flag has to be a ref, not just the
+  // configLoaded state below: the poll() closure is created once inside a useEffect([]) that
+  // never re-runs, so a plain state read inside it would stay permanently stale at its
+  // initial `false` - re-seeding (and stomping whatever folder was just picked) on every poll.
+  const configLoadedRef = useRef(false);
   const [configLoaded, setConfigLoaded] = useState(false);
   const [path, setPath] = useState("");
   const [language, setLanguage] = useState("en");
@@ -162,11 +166,12 @@ function TranscriberPage({ libraryPaths }: { libraryPaths: string[] }) {
           if (cancelled) return;
           setResult(r);
           setError(null);
-          if (!configLoaded) {
+          if (!configLoadedRef.current) {
             if (r.config) {
               setPath(r.config.inputDir);
               setLanguage(r.config.language);
             }
+            configLoadedRef.current = true;
             setConfigLoaded(true);
           }
         })

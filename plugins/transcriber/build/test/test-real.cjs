@@ -285,6 +285,15 @@ async function run() {
   });
   console.log('T) navigating the real folder browser updates the picker input:', pathInput.value === '/lib/B');
 
+  // Regression: the picker form used to get re-seeded from the service's config on every
+  // poll (a stale closure over the "already seeded" flag inside the poll() effect), stomping
+  // whatever folder had just been picked - wait past at least one more poll tick and confirm
+  // the picked folder sticks instead of reverting to the configured one (/lib/A).
+  await TestUtils.act(async () => {
+    await new Promise((r) => setTimeout(r, 3100));
+  });
+  console.log('T2) the picked folder survives a poll tick instead of reverting:', pathInput.value === '/lib/B');
+
   applyButton = Array.from(container.querySelectorAll('button')).find((b) => b.textContent === 'Apply');
   console.log('U) Apply becomes enabled once the folder actually changed:', applyButton.disabled === false);
 
