@@ -37,7 +37,17 @@ hand one at a time.
 - **Marker preview generation is queued automatically** once the run
   finishes, scoped to only the marker(s) it actually created (Stash's
   `metadataGenerate` mutation with `markerIDs` set) - nothing else in your
-  library gets touched. Skipped entirely if nothing was created.
+  library gets touched. Skipped entirely if nothing was created. Covers the
+  marker card's static thumbnail, animated hover preview, and video preview
+  (`markerScreenshots`/`markerImagePreviews`/`markers`) - without
+  `markerScreenshots` the card's thumbnail is left showing as pending
+  indefinitely, since the video preview alone doesn't cover it.
+- **Respects `.stashignore`** - a folder (or individual subtitle file) a
+  `.stashignore` excludes is skipped, the same way Stash's own library scan
+  skips it: gitignore-style patterns, applied hierarchically from the folder
+  you pick down into each subfolder, with full support for negation
+  (`!pattern`), `**`, and anchored vs. basename-at-any-depth matching. An
+  ignored folder is never even walked into, not just filtered out afterwards.
 - Runs as a background job (visible in Stash's task queue), since searching
   every subtitle under a folder can take a while on a large library. The page
   shows its progress and final status; per-marker detail (what was created,

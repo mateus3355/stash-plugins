@@ -9,6 +9,8 @@ from subtitleMarkers import (
     parse_srt,
     candidate_video_prefixes,
     path_prefix_regex,
+    find_srt_files,
+    _translate_gitignore_pattern,
     run,
 )
 
@@ -121,6 +123,152 @@ class PathPrefixRegexTests(unittest.TestCase):
 
         pattern = path_prefix_regex("/lib/movie")
         self.assertIsNone(re.match(pattern, "/lib/movie.en.mp4"))
+
+
+class GitignorePatternTests(unittest.TestCase):
+    """@see docs on _translate_gitignore_pattern for the anchoring rule being tested."""
+
+    def matches(self, pattern, rel_path):
+        return bool(_translate_gitignore_pattern(pattern).match(rel_path))
+
+    def test_bare_name_matches_at_any_depth(self):
+        self.assertTrue(self.matches("temp", "temp"))
+        self.assertTrue(self.matches("temp", "sub/temp"))
+        self.assertTrue(self.matches("temp", "a/b/c/temp"))
+
+    def test_pattern_with_a_slash_is_anchored_to_its_own_directory(self):
+        self.assertTrue(self.matches("sub/temp", "sub/temp"))
+        self.assertFalse(self.matches("sub/temp", "other/sub/temp"))
+
+    def test_leading_slash_anchors_explicitly(self):
+        self.assertTrue(self.matches("/temp", "temp"))
+        self.assertFalse(self.matches("/temp", "sub/temp"))
+
+    def test_unanchored_bare_glob_matches_the_basename_at_any_depth(self):
+        # No literal "/" in the pattern, so (like a bare name) it matches wherever the
+        # basename is found - the same reason a plain *.log .gitignore entry ignores
+        # logs in every subfolder, not just the root.
+        self.assertTrue(self.matches("*.srt", "movie.srt"))
+        self.assertTrue(self.matches("*.srt", "sub/movie.srt"))
+
+    def test_star_does_not_cross_a_path_separator_within_an_anchored_pattern(self):
+        # Anchored (has a "/" elsewhere in the pattern) - here "*" must stay inside the
+        # "sub" segment, not expand into "sub/extra".
+        self.assertTrue(self.matches("sub*/movie.srt", "sub/movie.srt"))
+        self.assertFalse(self.matches("sub*/movie.srt", "sub/extra/movie.srt"))
+
+    def test_double_star_crosses_path_separators(self):
+        self.assertTrue(self.matches("**/temp", "temp"))
+        self.assertTrue(self.matches("**/temp", "a/b/temp"))
+
+    def test_question_mark_matches_one_character_not_a_separator(self):
+        self.assertTrue(self.matches("movie?.srt", "movie1.srt"))
+        self.assertFalse(self.matches("movie?.srt", "movie12.srt"))
+        self.assertFalse(self.matches("movie?.srt", "movie/.srt"))
+
+    def test_character_class(self):
+        self.assertTrue(self.matches("movie[12].srt", "movie1.srt"))
+        self.assertFalse(self.matches("movie[12].srt", "movie3.srt"))
+
+
+class FindSrtFilesStashignoreTests(unittest.TestCase):
+    """@see docs/README's "How it works" - folders and files a .stashignore excludes are
+    skipped the same way Stash's own library scan skips them."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmpdir.cleanup)
+
+    def write(self, relpath, content=""):
+        full = os.path.join(self.tmpdir.name, relpath)
+        os.makedirs(os.path.dirname(full), exist_ok=True)
+        with open(full, "w", encoding="utf-8") as f:
+            f.write(content)
+        return full
+
+    def found(self):
+        return {os.path.relpath(p, self.tmpdir.name) for p in find_srt_files(self.tmpdir.name)}
+
+    def test_no_stashignore_finds_everything(self):
+        self.write("a.srt")
+        self.write("sub/b.srt")
+        self.assertEqual(self.found(), {"a.srt", os.path.join("sub", "b.srt")})
+
+    def test_wildcard_ignores_everything_in_that_folder_only(self):
+        self.write("ignored/a.srt")
+        self.write("ignored/sub/b.srt")
+        self.write("kept/c.srt")
+        self.write("ignored/.stashignore", "*\n")
+
+        self.assertEqual(self.found(), {os.path.join("kept", "c.srt")})
+
+    def test_never_descends_into_an_ignored_folder(self):
+        # A subfolder of an ignored folder is never even walked, not just filtered out of
+        # the results afterwards - matches Stash's own scanner (fs.SkipDir). A real,
+        # unreadable directory would raise if os.walk tried to list it; os.walk silently
+        # skips unreadable dirs by default instead, so the walked-paths spy below is the
+        # direct way to prove the prune, not just an output-equivalent one.
+        import unittest.mock
+
+        self.write("ignored/sub/deep/c.srt")
+        self.write("ignored/.stashignore", "*\n")
+
+        real_walk = os.walk
+        walked = []
+
+        def spying_walk(*args, **kwargs):
+            for dirpath, dirnames, filenames in real_walk(*args, **kwargs):
+                walked.append(dirpath)
+                yield dirpath, dirnames, filenames
+
+        with unittest.mock.patch("subtitleMarkers.os.walk", side_effect=spying_walk):
+            list(find_srt_files(self.tmpdir.name))
+
+        self.assertNotIn(os.path.join(self.tmpdir.name, "ignored", "sub"), walked)
+        self.assertNotIn(os.path.join(self.tmpdir.name, "ignored", "sub", "deep"), walked)
+
+    def test_ignores_a_specific_file_by_name(self):
+        self.write("a.srt")
+        self.write("b.srt")
+        self.write(".stashignore", "b.srt\n")
+
+        self.assertEqual(self.found(), {"a.srt"})
+
+    def test_applies_hierarchically_to_subfolders(self):
+        self.write("sub/a.srt")
+        self.write(".stashignore", "*.srt\n")
+
+        self.assertEqual(self.found(), set())
+
+    def test_double_star_directory_pattern_matches_at_any_depth(self):
+        # Mirrors Stash's own TestStashIgnore_DoubleStarPattern (pkg/file/stashignore_test.go):
+        # "**/temp/" excludes every "temp" folder, however deep, but leaves siblings alone.
+        self.write("a/video2.srt")
+        self.write("a/temp/video3.srt")
+        self.write("a/b/temp/video4.srt")
+        self.write(".stashignore", "**/temp/\n")
+
+        self.assertEqual(self.found(), {os.path.join("a", "video2.srt")})
+
+    def test_negation_un_ignores_within_a_more_specific_stashignore(self):
+        self.write("sub/keep-me.srt")
+        self.write("sub/skip-me.srt")
+        self.write(".stashignore", "*.srt\n")
+        self.write("sub/.stashignore", "!keep-me.srt\n")
+
+        self.assertEqual(self.found(), {os.path.join("sub", "keep-me.srt")})
+
+    def test_comment_and_blank_lines_are_ignored(self):
+        self.write("a.srt")
+        self.write(".stashignore", "# a comment\n\n   \n")
+
+        self.assertEqual(self.found(), {"a.srt"})
+
+    def test_empty_stashignore_ignores_nothing(self):
+        self.write("a.srt")
+        self.write(".stashignore", "")
+
+        self.assertEqual(self.found(), {"a.srt"})
 
 
 class RunIntegrationTests(unittest.TestCase):

@@ -52,11 +52,134 @@ def parse_srt(content):
     return cues
 
 
+STASHIGNORE_FILENAME = ".stashignore"
+
+
+def _translate_gitignore_pattern(pattern):
+    """Compiles one .stashignore line (no leading "!", no trailing "/" - the caller strips
+    those) into a regex matching a path relative to the .stashignore's own directory
+    (forward slashes, no leading slash) - the same semantics Stash's own .stashignore
+    support uses (pkg/file/stashignore.go, via a gitignore-pattern library): a pattern with
+    no "/" (besides a possible trailing one) matches at any depth; one containing a "/"
+    elsewhere is anchored to the .stashignore's own directory."""
+    anchored = pattern.startswith("/")
+    if anchored:
+        pattern = pattern[1:]
+    anchored = anchored or ("/" in pattern)
+
+    i, n = 0, len(pattern)
+    parts = []
+    while i < n:
+        c = pattern[i]
+        if pattern[i : i + 3] == "**/":
+            parts.append("(?:.*/)?")
+            i += 3
+        elif c == "*" and pattern[i : i + 2] == "**":
+            parts.append(".*")
+            i += 2
+        elif c == "*":
+            parts.append("[^/]*")
+            i += 1
+        elif c == "?":
+            parts.append("[^/]")
+            i += 1
+        elif c == "[":
+            j = pattern.find("]", i + 1)
+            if j == -1:
+                parts.append(re.escape(c))
+                i += 1
+            else:
+                parts.append(pattern[i : j + 1])
+                i = j + 1
+        else:
+            parts.append(re.escape(c))
+            i += 1
+
+    body = "".join(parts)
+    return re.compile(("^" if anchored else "^(?:.*/)?") + body + "$")
+
+
+def _load_ignore_patterns(dirpath):
+    """Parses dirpath's own .stashignore, if it has one, into a list of
+    (negate, dir_only, regex) tuples in file order (later entries can override earlier
+    ones via negation, same as gitignore). Returns [] if there isn't one, or it's empty."""
+    try:
+        with open(os.path.join(dirpath, STASHIGNORE_FILENAME), "r", encoding="utf-8-sig", errors="replace") as f:
+            raw_lines = f.read().splitlines()
+    except OSError:
+        return []
+
+    patterns = []
+    for line in raw_lines:
+        line = line.rstrip()
+        if not line or (line.startswith("#") and not line.startswith("\\#")):
+            continue
+        negate = line.startswith("!")
+        if negate:
+            line = line[1:]
+        if line.startswith("\\!") or line.startswith("\\#"):
+            line = line[1:]
+        dir_only = line.endswith("/") and not line.endswith("\\/")
+        if dir_only:
+            line = line[:-1]
+        if not line:
+            continue
+        patterns.append((negate, dir_only, _translate_gitignore_pattern(line)))
+    return patterns
+
+
+def _collect_ignore_entries(dirpath, root, cache):
+    """The (dir_path, patterns) pairs applicable to dirpath, from root down to dirpath
+    itself, in that order - mirrors Stash's own collectIgnoreEntries (pkg/file/stashignore.go),
+    rooted at the folder this task was given rather than a configured library root, since
+    that's the only root this task knows about."""
+    dirpath = os.path.normpath(dirpath)
+    if dirpath in cache:
+        return cache[dirpath]
+
+    if dirpath == os.path.normpath(root):
+        entries = []
+    else:
+        entries = list(_collect_ignore_entries(os.path.dirname(dirpath), root, cache))
+
+    patterns = _load_ignore_patterns(dirpath)
+    if patterns:
+        entries = entries + [(dirpath, patterns)]
+    cache[dirpath] = entries
+    return entries
+
+
+def _is_ignored(path, is_dir, entries):
+    ignored = False
+    for dir_path, patterns in entries:
+        rel = os.path.relpath(path, dir_path).replace(os.sep, "/")
+        for negate, dir_only, regex in patterns:
+            if dir_only and not is_dir:
+                continue
+            if regex.match(rel):
+                ignored = not negate
+    return ignored
+
+
 def find_srt_files(root):
-    for dirpath, _dirnames, filenames in os.walk(root):
+    """Every .srt file under root, skipping any folder (and everything inside it) or
+    individual file a .stashignore excludes - the same files Stash's own library scan
+    would skip, so a subtitle search never touches what you've deliberately kept out of
+    your library."""
+    cache = {}
+    root = os.path.normpath(root)
+    for dirpath, dirnames, filenames in os.walk(root, topdown=True):
+        entries = _collect_ignore_entries(dirpath, root, cache)
+        # Pruned in place so os.walk never descends into an ignored folder, same as
+        # Stash's own scanner (fs.SkipDir) - not just filtered out of the results after.
+        dirnames[:] = [d for d in dirnames if not _is_ignored(os.path.join(dirpath, d), True, entries)]
         for filename in filenames:
-            if filename.lower().endswith(".srt"):
-                yield os.path.join(dirpath, filename)
+            if not filename.lower().endswith(".srt"):
+                continue
+            full_path = os.path.join(dirpath, filename)
+            if _is_ignored(full_path, False, entries):
+                continue
+            yield full_path
 
 
 def candidate_video_prefixes(srt_path):

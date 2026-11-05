@@ -79,10 +79,24 @@ mutation SceneMarkerCreate($input: SceneMarkerCreateInput!) {
         return data.get("sceneMarkerCreate")
 
     def generate_marker_previews(self, marker_ids):
-        """Queues preview generation for the given markers. Returns the generate job's id."""
+        """Queues preview generation for the given markers - the video preview (markers),
+        the static thumbnail the marker card shows (markerScreenshots), and the animated
+        hover preview (markerImagePreviews). Without markerScreenshots, the card's image
+        is left showing as pending indefinitely - markers alone only covers the video clip.
+        Returns the generate job's id."""
         query = """
 mutation SubtitleMarkersGeneratePreviews($input: GenerateMetadataInput!) {
   metadataGenerate(input: $input)
 }"""
-        data = self._gql(query, {"input": {"markers": True, "markerIDs": marker_ids}})
+        data = self._gql(
+            query,
+            {
+                "input": {
+                    "markers": True,
+                    "markerScreenshots": True,
+                    "markerImagePreviews": True,
+                    "markerIDs": marker_ids,
+                }
+            },
+        )
         return data.get("metadataGenerate")
