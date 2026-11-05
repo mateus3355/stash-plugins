@@ -24,10 +24,20 @@ without watching the whole thing or editing scenes by hand one at a time.
   one used in the Scan/Clean task dialogs) - type a path or click your way
   down through subfolders, starting from your configured library paths.
 - **Search-only by default, marker creation is opt-in**: with "Also create
-  scene markers" off, nothing is written to your library - results are just
-  links to each match's timestamp, shown as soon as the search finishes (no
-  background job or tag/title needed). Turning it on reveals the tag/title
-  fields and switches to the marker-creating background job described below.
+  scene markers" off, nothing is written to your library - results are shown
+  as soon as the search finishes (no background job or tag/title needed),
+  each as a real `SceneCard` (the same card used everywhere else in Stash -
+  tags, performers, the hover preview, etc.), fetched separately right after
+  the search itself resolves. Clicking the card's thumbnail or title still
+  jumps to this specific match's timestamp, not just the scene generally -
+  `SceneCard` itself has no notion of "this one subtitle hit", so clicks on
+  those two elements are caught before its own link navigates and redirected
+  to `?t=<seconds>` instead; everything else on the card (tag/performer
+  popovers, the organized icon, etc.) works completely normally, since none
+  of that is part of either link to begin with. Turning marker creation on
+  reveals the tag/title fields and switches to the background job described
+  below (and drops back to the plain results list, not cards, since a
+  marker is being created for each one rather than just linking to it).
 - **Matching text to a scene**: a subtitle file is matched to its video using
   the same convention Stash itself uses for captions - `movie.srt` or
   `movie.en.srt` next to `movie.mp4` belongs to that scene. The scene has to

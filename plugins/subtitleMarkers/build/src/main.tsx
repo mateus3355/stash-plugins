@@ -3,7 +3,9 @@ import { ConfigurationProvider } from "src/hooks/Config";
 import { ToastProvider } from "src/hooks/Toast";
 import { TagIDSelect } from "src/components/Tags/TagSelect";
 import { FolderSelect } from "src/components/Shared/FolderSelect/FolderSelect";
-import { queryFindSceneMarkers } from "src/core/StashService";
+import { SceneCard } from "src/components/Scenes/SceneCard";
+import { useCardWidth, useContainerDimensions } from "src/components/Shared/GridCard/GridCard";
+import { queryFindSceneMarkers, queryFindScenesByID } from "src/core/StashService";
 import TextUtils from "src/utils/text";
 
 import type ReactNS from "react";
@@ -22,7 +24,7 @@ const { React } = PluginApi;
 const { useState, useEffect } = React;
 const Bootstrap = PluginApi.libraries.Bootstrap;
 const { Nav, Button, Form, Alert, ProgressBar, Spinner } = Bootstrap;
-const { NavLink } = PluginApi.libraries.ReactRouterDOM;
+const { NavLink, useHistory } = PluginApi.libraries.ReactRouterDOM;
 const { FontAwesomeIcon } = PluginApi.libraries.ReactFontAwesome;
 const FA = PluginApi.libraries.FontAwesomeSolid;
 
@@ -131,6 +133,14 @@ function SubtitleMarkersPage({ libraryPaths }: { libraryPaths: string[] }) {
   const [searching, setSearching] = useState(false);
   const [results, setResults] = useState<SearchResult[] | null>(null);
   const [searchError, setSearchError] = useState<string | null>(null);
+  // The real scene data (tags, performers, preview, etc.) each result's SceneCard needs -
+  // fetched separately, after the search itself resolves, keyed by scene id (several results
+  // can point at the same scene, at different timestamps - fetched once each either way).
+  const [sceneMap, setSceneMap] = useState<Map<string, GQL.SlimSceneDataFragment> | null>(null);
+  const [sceneMapError, setSceneMapError] = useState<string | null>(null);
+  const history = useHistory();
+  const [cardsContainerRef, { width: cardsContainerWidth }] = useContainerDimensions();
+  const cardWidth = useCardWidth(cardsContainerWidth, 1, [280, 340, 480, 640]);
 
   const jobRunning = starting || (job !== null && RUNNING_STATUSES.includes(job.status));
   const busy = jobRunning || searching;
@@ -187,15 +197,55 @@ function SubtitleMarkersPage({ libraryPaths }: { libraryPaths: string[] }) {
     setSearching(true);
     setSearchError(null);
     setResults(null);
+    setSceneMap(null);
+    setSceneMapError(null);
     runPluginOperation({ mode: "search", path: path.trim(), search: search.trim() })
       .then((output: { results: SearchResult[] }) => {
         setSearching(false);
         setResults(output.results);
+        loadSceneCardData(output.results);
       })
       .catch((e: any) => {
         setSearching(false);
         setSearchError(String(e && e.message ? e.message : e));
       });
+  }
+
+  // Separate from the search itself - the search already tells us everything needed for a
+  // plain link (scene id, title, timestamp); this is purely to get the extra data a real
+  // SceneCard needs (tags, performers, preview paths, etc.) to show something richer.
+  function loadSceneCardData(searchResults: SearchResult[]) {
+    const ids = Array.from(new Set(searchResults.map((r) => Number(r.sceneId)))).filter((n) => !Number.isNaN(n));
+    if (ids.length === 0) {
+      setSceneMap(new Map());
+      return;
+    }
+    queryFindScenesByID(ids)
+      .then((res: any) => {
+        const map = new Map<string, GQL.SlimSceneDataFragment>();
+        (res.data?.findScenes?.scenes ?? []).forEach((s: GQL.SlimSceneDataFragment) => map.set(s.id, s));
+        setSceneMap(map);
+      })
+      .catch((e: any) => {
+        setSceneMapError(String(e && e.message ? e.message : e));
+        setSceneMap(new Map());
+      });
+  }
+
+  // GridCard renders both the thumbnail and the title as a real react-router <Link> to the
+  // plain scene URL (no per-result timestamp - it has no idea this card represents one
+  // specific subtitle hit, not the scene generally). Capture-phase, so this runs *before*
+  // that Link's own click handler does, and can stop it from navigating there instead.
+  // Scoped to just those two elements (by the classes GridCard/SceneCard actually render -
+  // .scene-card-link for the thumbnail, the title's own .card-section-title) rather than the
+  // whole card, so a click on a tag/performer popover, the organized icon, etc. (none of
+  // which are inside either) is left completely alone.
+  function handleResultCardClickCapture(e: any, result: SearchResult) {
+    const target = e.target as HTMLElement;
+    if (!target.closest(".scene-card-link") && !target.closest(".card-section-title")) return;
+    e.preventDefault();
+    e.stopPropagation();
+    history.push(`/scenes/${result.sceneId}?t=${result.seconds}`);
   }
 
   function handleRunClick() {
@@ -246,16 +296,47 @@ function SubtitleMarkersPage({ libraryPaths }: { libraryPaths: string[] }) {
         <Button size="sm" variant="secondary" className="mb-2" onClick={() => handlePlayAllInQueue(results)}>
           Play All in Queue
         </Button>
-        <ul className="list-unstyled">
-          {results.map((r, i) => (
-            <li key={i} className="subtitle-markers-result">
-              <a href={`/scenes/${r.sceneId}?t=${r.seconds}`} target="_blank" rel="noreferrer">
-                {r.sceneTitle || `Scene ${r.sceneId}`} @ {TextUtils.secondsToTimestamp(r.seconds)}
-              </a>
-              <div className="text-muted subtitle-markers-result-text">{r.text}</div>
-            </li>
-          ))}
-        </ul>
+        {sceneMapError ? (
+          <Alert variant="warning" className="mt-2">
+            Couldn't load scene previews ({sceneMapError}) - showing plain links instead.
+          </Alert>
+        ) : null}
+        {!sceneMap ? (
+          <div className="text-muted mt-2">
+            <Spinner animation="border" size="sm" className="mr-2" />
+            Loading scene previews…
+          </div>
+        ) : (
+          <div className="row justify-content-center subtitle-markers-result-cards" ref={cardsContainerRef}>
+            {results.map((r, i) => {
+              const scene = sceneMap.get(r.sceneId);
+              // No scene data for this result (deleted since being indexed, or the lookup
+              // above failed) - fall back to the plain link rather than silently dropping it.
+              if (!scene) {
+                return (
+                  <div key={i} className="subtitle-markers-result subtitle-markers-result-fallback">
+                    <a href={`/scenes/${r.sceneId}?t=${r.seconds}`} target="_blank" rel="noreferrer">
+                      {r.sceneTitle || `Scene ${r.sceneId}`} @ {TextUtils.secondsToTimestamp(r.seconds)}
+                    </a>
+                    <div className="text-muted subtitle-markers-result-text">{r.text}</div>
+                  </div>
+                );
+              }
+              return (
+                <div
+                  key={i}
+                  className="subtitle-markers-result-card"
+                  onClickCapture={(e: any) => handleResultCardClickCapture(e, r)}
+                >
+                  <SceneCard scene={scene} width={cardWidth} />
+                  <div className="text-muted subtitle-markers-result-text">
+                    @ {TextUtils.secondsToTimestamp(r.seconds)} — {r.text}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
     );
   }

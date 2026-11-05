@@ -64,6 +64,26 @@ async function run() {
     '/lib': { path: '/lib', parent: '', directories: ['/lib/A'] },
   };
 
+  // Full SlimSceneDataFragment-shaped scenes, for the real SceneCard each search result now
+  // renders - minimal but complete (every field SceneCard/GridCard actually reads), not just
+  // {id, title} like the plugin's own SearchResult.
+  function makeMockScene(overrides) {
+    return Object.assign(
+      {
+        __typename: 'Scene', id: '1', title: 'Ember Evening', code: null, details: '', director: null, urls: [], date: '2024-01-01',
+        rating100: null, o_counter: 0, organized: false, interactive: false, interactive_speed: null, resume_time: null, play_duration: null, play_count: null,
+        files: [{ __typename: 'VideoFile', id: 'f1', path: '/lib/A/one.mp4', size: 1000, mod_time: '2024-01-01', duration: 300, video_codec: 'h264', audio_codec: 'aac', width: 1920, height: 1080, frame_rate: 30, bit_rate: 1000, fingerprints: [] }],
+        paths: { __typename: 'ScenePathsType', screenshot: '/scene/1/screenshot', preview: '/scene/1/preview', stream: '', webp: '', vtt: '', sprite: '', funscript: '', interactive_heatmap: '', caption: null },
+        scene_markers: [], galleries: [], studio: null, groups: [], tags: [{ __typename: 'Tag', id: 'tag-1', name: 'Knock Knock' }], performers: [], stash_ids: [],
+      },
+      overrides
+    );
+  }
+  const scenesByID = {
+    '1': makeMockScene({}),
+    '2': makeMockScene({ id: '2', title: 'Morning Light', tags: [] }),
+  };
+
   const apolloCalls = [];
 
   const apolloLink = new Apollo.ApolloLink((operation) => {
@@ -115,16 +135,21 @@ async function run() {
       data = {
         runPluginOperation: {
           results: [
-            { sceneId: 'scene-1', sceneTitle: 'Ember Evening', seconds: 12.5, text: 'Someone said knock knock' },
+            { sceneId: '1', sceneTitle: 'Ember Evening', seconds: 12.5, text: 'Someone said knock knock' },
             // Second hit in the SAME scene, later on - exercises the in-place seek path.
-            { sceneId: 'scene-1', sceneTitle: 'Ember Evening', seconds: 40, text: 'Knock knock again' },
+            { sceneId: '1', sceneTitle: 'Ember Evening', seconds: 40, text: 'Knock knock again' },
             // Third hit in a DIFFERENT scene - exercises the cross-scene navigation path.
-            { sceneId: 'scene-2', sceneTitle: 'Morning Light', seconds: 5, text: 'One more knock knock' },
+            { sceneId: '2', sceneTitle: 'Morning Light', seconds: 5, text: 'One more knock knock' },
           ],
           matchedCues: 3,
           unmatchedSrt: 0,
         },
       };
+    } else if (name === 'FindScenes') {
+      // queryFindScenesByID's own query, for the real SceneCard each search result renders.
+      const ids = (body.variables.scene_ids || []).map(String);
+      const scenes = ids.map((id) => scenesByID[id]).filter(Boolean);
+      data = { findScenes: { __typename: 'FindScenesResultType', count: scenes.length, filesize: 0, duration: 0, scenes } };
     } else if (name === 'FindSceneMarkers') {
       // "Play All (Filtered)"'s own query, through the same internal StashService client as
       // FindTagsForSelect below - mirrors a filter matching 2 markers across 2 scenes.
@@ -135,13 +160,13 @@ async function run() {
           scene_markers: [
             {
               __typename: 'SceneMarker', id: 'marker-1', title: '', seconds: 30, end_seconds: null, stream: '', preview: '', screenshot: '',
-              scene: { __typename: 'Scene', id: 'scene-1', title: 'Ember Evening', files: [], performers: [] },
+              scene: { __typename: 'Scene', id: '1', title: 'Ember Evening', files: [], performers: [] },
               primary_tag: { __typename: 'Tag', id: 'tag-1', name: 'Knock Knock' },
               tags: [],
             },
             {
               __typename: 'SceneMarker', id: 'marker-2', title: 'Custom title', seconds: 90, end_seconds: null, stream: '', preview: '', screenshot: '',
-              scene: { __typename: 'Scene', id: 'scene-3', title: '', files: [], performers: [] },
+              scene: { __typename: 'Scene', id: '3', title: '', files: [], performers: [] },
               primary_tag: { __typename: 'Tag', id: 'tag-1', name: 'Knock Knock' },
               tags: [],
             },
@@ -268,13 +293,13 @@ async function run() {
   );
   console.log(
     'C11) a marker with no title falls back to its primary tag\'s name:',
-    queueFromMarkers.items[0].sceneId === 'scene-1' && queueFromMarkers.items[0].text === 'Knock Knock'
+    queueFromMarkers.items[0].sceneId === '1' && queueFromMarkers.items[0].text === 'Knock Knock'
   );
   console.log(
     'C12) a marker with its own title uses that instead:',
-    queueFromMarkers.items[1].sceneId === 'scene-3' && queueFromMarkers.items[1].text === 'Custom title'
+    queueFromMarkers.items[1].sceneId === '3' && queueFromMarkers.items[1].text === 'Custom title'
   );
-  console.log('C13) it opens the first item in a new tab:', openCalls.length === 1 && openCalls[0] === '/scenes/scene-1?t=30&continue=true&autoplay=true');
+  console.log('C13) it opens the first item in a new tab:', openCalls.length === 1 && openCalls[0] === '/scenes/1?t=30&continue=true&autoplay=true');
 
   // --- A page's own filterHook (e.g. a Tag's "Markers" tab, constraining to that tag) is
   // re-applied here too, not silently dropped - see the comment on the before() hook itself.
@@ -290,6 +315,15 @@ async function run() {
   window.sessionStorage.clear();
 
   const emotionCache = createEmotionCache({ key: 'css' });
+  // Captures the real history object SubtitleMarkersPage's own useHistory() call resolves -
+  // SubtitleMarkersPage needs a real Router ancestor for that to work at all (it always has
+  // one for real, registered via PluginApi.register.route into the app's own top-level
+  // Router), and MemoryRouter (unlike a real browser) keeps its location purely in memory,
+  // never touching window.location - this is how the test observes where it navigated to.
+  function HistoryCapture() {
+    window.__testHistory = ReactRouterDOM.useHistory();
+    return null;
+  }
   function Shell({ children }) {
     return React.createElement(
       EmotionCacheProvider,
@@ -297,7 +331,16 @@ async function run() {
       React.createElement(
         ReactIntl.IntlProvider,
         { locale: 'en', messages: {}, onError: () => {} },
-        React.createElement(Apollo.ApolloProvider, { client: apolloClient }, children)
+        React.createElement(
+          Apollo.ApolloProvider,
+          { client: apolloClient },
+          React.createElement(
+            ReactRouterDOM.MemoryRouter,
+            { initialEntries: ['/subtitle-markers'] },
+            React.createElement(HistoryCapture),
+            children
+          )
+        )
       )
     );
   }
@@ -372,13 +415,49 @@ async function run() {
   );
   console.log('Q) no marker-creation calls were made in search-only mode:', !graphqlCalls.some((c) => c.name === 'SubtitleMarkersRunTask'));
 
-  const resultLink = container.querySelector('.subtitle-markers-result a');
-  console.log('R) a result link is shown, pointing at the scene and timestamp:', !!resultLink && resultLink.getAttribute('href') === '/scenes/scene-1?t=12.5');
-  console.log('S) the result shows the scene title and matched subtitle text:', container.textContent.includes('Ember Evening') && container.textContent.includes('knock knock'));
+  // The real SceneCard needs its own scene data (tags, preview, etc.) - a separate fetch,
+  // after the search itself, so wait for that too before checking what's actually rendered.
+  // (There's a real "Loading scene previews…" state for the gap between the two - not
+  // asserted here since the mocked fetch resolves too fast to reliably observe it.)
+  await TestUtils.act(async () => {
+    await new Promise((r) => setTimeout(r, 20));
+  });
+  const findScenesCall = graphqlCalls.find((c) => c.name === 'FindScenes');
+  console.log('R) it fetches the real scene data for every unique scene id among the results:', !!findScenesCall && findScenesCall.variables.scene_ids.sort().join(',') === '1,2');
+
+  const resultCards = Array.from(container.querySelectorAll('.subtitle-markers-result-card'));
+  console.log('S) a real SceneCard is rendered for each result (not a plain link):', resultCards.length === 3 && !!container.querySelector('.scene-card'));
+  console.log('S2) it shows the scene\'s title and a hover-preview video/image, not just plain text:', container.textContent.includes('Ember Evening') && !!container.querySelector('.scene-card-preview-video'));
+  console.log('S3) it shows the scene\'s real tags, not just the matched subtitle text:', !!container.querySelector('.tag-count') && container.textContent.includes('knock knock'));
+  console.log('S4) the matched subtitle text/timestamp is still shown alongside the card:', resultCards[0].textContent.includes('Someone said knock knock'));
+
+  // GridCard renders both the thumbnail and the title as a <Link> to the plain scene URL
+  // (/scenes/1, no timestamp) - clicking either must still land on *this* result's own
+  // timestamp instead, not the scene generally.
+  const firstCardThumbnailLink = resultCards[0].querySelector('a.scene-card-link');
+  console.log('S5) the underlying thumbnail link, unclicked, still points at the plain scene URL:', firstCardThumbnailLink.getAttribute('href') === '/scenes/1');
+  await TestUtils.act(async () => {
+    TestUtils.Simulate.click(firstCardThumbnailLink);
+  });
+  console.log(
+    'S6) clicking the thumbnail navigates to this result\'s own timestamp instead:',
+    window.__testHistory.location.pathname === '/scenes/1' && window.__testHistory.location.search === '?t=12.5'
+  );
+
+  // A tag-count popover click (not a navigating link) must be left alone - not hijacked into
+  // navigating anywhere, since it isn't inside the thumbnail or title link at all.
+  await TestUtils.act(async () => {
+    window.__testHistory.push('/subtitle-markers');
+  });
+  const tagCountButton = resultCards[0].querySelector('.tag-count button');
+  await TestUtils.act(async () => {
+    TestUtils.Simulate.click(tagCountButton);
+  });
+  console.log('S7) clicking the tag-count popover (not a navigating link) does not navigate away:', window.__testHistory.location.pathname === '/subtitle-markers');
 
   // ---------------------------------------------------------------------
-  // "Play All in Queue" - plays through all 3 results in order: two hits in scene-1 (an
-  // in-place seek between them), then one in scene-2 (a real navigation). window.location
+  // "Play All in Queue" - plays through all 3 results in order: two hits in 1 (an
+  // in-place seek between them), then one in 2 (a real navigation). window.location
   // can't actually navigate in jsdom (and its .assign can't be mocked - Location is
   // non-configurable even here), so "arriving" at each scene is simulated with
   // history.pushState, same as the browser would leave window.location after a real one.
@@ -403,9 +482,9 @@ async function run() {
     document.body.appendChild(document.createElement('span')).remove();
   }
 
-  // Simulate having arrived at scene-1 (the first queue item) - a real video.js player
+  // Simulate having arrived at 1 (the first queue item) - a real video.js player
   // structure, so the "ended"-listener/seek code can find the real <video> element.
-  window.history.pushState({}, '', '/scenes/scene-1');
+  window.history.pushState({}, '', '/scenes/1');
   const videoJsContainer = document.createElement('div');
   videoJsContainer.className = 'video-js';
   const video = document.createElement('video');
@@ -427,23 +506,23 @@ async function run() {
   }
   console.log('X) Prev is disabled on the first item:', widgetButton('Prev').disabled === true);
 
-  // --- Next: same scene (scene-1, item 2) - should seek in place, no navigation ---
+  // --- Next: same scene (1, item 2) - should seek in place, no navigation ---
   TestUtils.Simulate.click(widgetButton('Next'));
   console.log('Y) advancing to the same scene\'s second hit seeks the real <video> element:', video.currentTime === 40);
-  console.log('Z) ...without actually navigating away:', window.location.pathname === '/scenes/scene-1');
+  console.log('Z) ...without actually navigating away:', window.location.pathname === '/scenes/1');
   console.log('AA) the widget updates to show the second item:', widgetText().includes('Marker 2 of 3') && widgetText().includes('Knock knock again'));
 
-  // --- Next again: scene-2, item 3 - a different scene, so a real navigation is attempted.
+  // --- Next again: 2, item 3 - a different scene, so a real navigation is attempted.
   // sessionStorage is updated before that happens either way (goToQueueIndex saves first) -
-  // and the widget disappears once we're (simulated as) still on scene-1 but the queue now
-  // points at scene-2, since ensureQueueWidget correctly treats that as "not this page".
+  // and the widget disappears once we're (simulated as) still on 1 but the queue now
+  // points at 2, since ensureQueueWidget correctly treats that as "not this page".
   TestUtils.Simulate.click(widgetButton('Next'));
   const queueAfterCrossSceneNext = JSON.parse(window.sessionStorage.getItem('subtitleMarkersQueue') || 'null');
-  console.log('AB) the queue advances to index 2 (scene-2) even though navigation is simulated:', !!queueAfterCrossSceneNext && queueAfterCrossSceneNext.index === 2);
+  console.log('AB) the queue advances to index 2 (2) even though navigation is simulated:', !!queueAfterCrossSceneNext && queueAfterCrossSceneNext.index === 2);
   console.log('AC) the widget is removed once the page no longer matches the queue\'s current item:', !document.getElementById('subtitle-markers-queue-widget'));
 
-  // Simulate actually arriving at scene-2 (what a real navigation would have done).
-  window.history.pushState({}, '', '/scenes/scene-2');
+  // Simulate actually arriving at 2 (what a real navigation would have done).
+  window.history.pushState({}, '', '/scenes/2');
   nudgeObserver();
   await new Promise((r) => setTimeout(r, 0));
   console.log('AD) the widget reappears once on the right scene, showing the last item:', widgetText().includes('Marker 3 of 3') && widgetText().includes('One more knock knock'));
@@ -456,7 +535,7 @@ async function run() {
   console.log('AG) ...and removes the widget:', !document.getElementById('subtitle-markers-queue-widget'));
 
   // --- Stop button also clears an in-progress queue ---
-  window.history.pushState({}, '', '/scenes/scene-1');
+  window.history.pushState({}, '', '/scenes/1');
   window.sessionStorage.setItem('subtitleMarkersQueue', JSON.stringify({ items: queueAfterPlayAll.items, index: 0 }));
   nudgeObserver();
   await new Promise((r) => setTimeout(r, 0));
@@ -492,7 +571,7 @@ async function run() {
     video.dispatchEvent(new window.Event('pause'));
   }
 
-  window.history.pushState({}, '', '/scenes/scene-1');
+  window.history.pushState({}, '', '/scenes/1');
   window.sessionStorage.setItem('subtitleMarkersQueue', JSON.stringify({ items: queueAfterPlayAll.items, index: 0 }));
   nudgeObserver();
   await new Promise((r) => realSetTimeout(r, 0));
