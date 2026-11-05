@@ -102,6 +102,7 @@ def run(path, search, tag_id, title, stash):
 
     scene_cache = {}  # path prefix -> scene dict or None
     markers_by_scene = {}  # scene id -> list of seconds (existing + created this run)
+    created_marker_ids = []
 
     created = 0
     skipped_dup = 0
@@ -156,6 +157,7 @@ def run(path, search, tag_id, title, stash):
             if result:
                 existing.append(start)
                 created += 1
+                created_marker_ids.append(result["id"])
                 log.info(f"Marker created at {start:.1f}s in scene {scene_id} ({scene.get('title') or srt_path})")
             else:
                 log.error(f"Failed to create marker at {start:.1f}s in scene {scene_id}")
@@ -166,12 +168,19 @@ def run(path, search, tag_id, title, stash):
         f"markers created: {created} | skipped (near-duplicate): {skipped_dup} | "
         f"subtitles with no matching scene: {unmatched_srt}"
     )
+
+    generate_job_id = None
+    if created_marker_ids:
+        generate_job_id = stash.generate_marker_previews(created_marker_ids)
+        log.info(f"Queued marker preview generation for {len(created_marker_ids)} marker(s) (job {generate_job_id})")
+
     return {
         "output": "ok",
         "created": created,
         "skipped": skipped_dup,
         "unmatchedSrt": unmatched_srt,
         "matchedCues": matched_cues,
+        "generateJobId": generate_job_id,
     }
 
 

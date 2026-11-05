@@ -1,11 +1,12 @@
 # Subtitle Markers
 
-Adds a **Subtitle Markers** item to the main nav bar, leading to a page where
-you give a folder path and a phrase to search for; the plugin then searches
-every `.srt` subtitle file under that folder (recursively, including
-subfolders) for the phrase, and creates a scene marker wherever it's found -
-on the scene whose video file the subtitle belongs to, using the tag and
-title you choose.
+Adds a **Marker** item to the main nav bar, leading to a page where you pick
+a folder (browsing it the same way Stash's own Scan/Clean folder picker
+does) and a phrase to search for; the plugin then searches every `.srt`
+subtitle file under that folder (recursively, including subfolders) for the
+phrase, and creates a scene marker wherever it's found - on the scene whose
+video file the subtitle belongs to, using the tag and title you choose -
+then queues marker preview generation for whatever it created.
 
 Useful for turning something only written in a scene's subtitles (a line of
 dialogue, a safe word, a specific phrase) into markers you can filter/jump to
@@ -14,6 +15,9 @@ hand one at a time.
 
 ## How it works
 
+- **Folder picking is Stash's own real `FolderSelect` component** (the same
+  one used in the Scan/Clean task dialogs) - type a path or click your way
+  down through subfolders, starting from your configured library paths.
 - **Matching text to a scene**: a subtitle file is matched to its video using
   the same convention Stash itself uses for captions - `movie.srt` or
   `movie.en.srt` next to `movie.mp4` belongs to that scene. The scene has to
@@ -30,6 +34,10 @@ hand one at a time.
 - **Malformed subtitle files don't stop the run** - a block that doesn't
   parse as a valid cue is skipped, not fatal; the same goes for a subtitle
   with no matching scene in your library (logged and skipped, not an error).
+- **Marker preview generation is queued automatically** once the run
+  finishes, scoped to only the marker(s) it actually created (Stash's
+  `metadataGenerate` mutation with `markerIDs` set) - nothing else in your
+  library gets touched. Skipped entirely if nothing was created.
 - Runs as a background job (visible in Stash's task queue), since searching
   every subtitle under a folder can take a while on a large library. The page
   shows its progress and final status; per-marker detail (what was created,
@@ -39,8 +47,8 @@ hand one at a time.
 ## Two parts
 
 - **UI** (`subtitleMarkers.js`, compiled - see `build/README.md`): the form
-  (path, search text, tag, title) and job-progress display, using Stash's
-  real `TagIDSelect` component, not a look-alike.
+  (folder, search text, tag, title) and job-progress display, using Stash's
+  real `FolderSelect` and `TagIDSelect` components, not look-alikes.
 - **Server-side task** (`subtitleMarkers.py`): does the actual work - walking
   the filesystem, parsing `.srt` files, and creating markers via Stash's
   GraphQL API. This runs on the Stash server itself (same as any other

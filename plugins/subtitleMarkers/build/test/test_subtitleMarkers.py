@@ -45,6 +45,11 @@ class FakeStash:
         self.created_markers.append((scene_id, seconds, title, primary_tag_id))
         return {"id": f"marker-{len(self.created_markers)}"}
 
+    def generate_marker_previews(self, marker_ids):
+        self.generate_calls = getattr(self, "generate_calls", [])
+        self.generate_calls.append(list(marker_ids))
+        return "generate-job-1"
+
 
 class ParseSrtTests(unittest.TestCase):
     def test_parses_basic_cues(self):
@@ -142,6 +147,19 @@ class RunIntegrationTests(unittest.TestCase):
 
         self.assertEqual(result["created"], 1)
         self.assertEqual(stash.created_markers, [("scene-1", 12.0, "Hello match", "tag-1")])
+        # Preview generation is queued, scoped to just the marker(s) this run created.
+        self.assertEqual(stash.generate_calls, [["marker-1"]])
+        self.assertEqual(result["generateJobId"], "generate-job-1")
+
+    def test_does_not_queue_generation_when_nothing_was_created(self):
+        self.write_srt("movie.srt", "1\n00:00:10,000 --> 00:00:11,000\nsomething else\n")
+        video_path = os.path.join(self.tmpdir.name, "movie.mp4")
+        stash = FakeStash({video_path: "scene-1"})
+
+        result = run(self.tmpdir.name, "hello", "tag-1", "t", stash)
+
+        self.assertEqual(getattr(stash, "generate_calls", []), [])
+        self.assertIsNone(result["generateJobId"])
 
     def test_match_is_case_insensitive(self):
         self.write_srt("movie.srt", "1\n00:00:01,000 --> 00:00:02,000\nHELLO there\n")

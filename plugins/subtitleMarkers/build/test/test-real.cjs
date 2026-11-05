@@ -58,6 +58,12 @@ async function run() {
     },
   ];
 
+  // The library's filesystem, for FolderSelect's own Directory query to browse.
+  const directories = {
+    '': { path: '', parent: null, directories: ['/lib'] },
+    '/lib': { path: '/lib', parent: '', directories: ['/lib/A'] },
+  };
+
   const apolloCalls = [];
 
   const apolloLink = new Apollo.ApolloLink((operation) => {
@@ -68,6 +74,10 @@ async function run() {
         let data;
         if (name === 'Configuration') {
           data = { configuration };
+        } else if (name === 'Directory') {
+          const path = (operation.variables && operation.variables.path) || '';
+          const dir = directories[path] || { path, parent: null, directories: [] };
+          data = { directory: { __typename: 'Directory', ...dir } };
         } else {
           throw new Error('unmocked apollo operation: ' + name);
         }
@@ -145,6 +155,18 @@ async function run() {
   const navResult = window.__navBeforeFn({ children: [React.createElement('span', { className: 'native' }, 'native')] });
   console.log('C) nav patch did not throw, returned props array:', Array.isArray(navResult));
 
+  // Render just the nav link this patch adds, to check its actual label text and icon -
+  // not just that patching succeeded.
+  const navContainer = document.createElement('div');
+  await TestUtils.act(async () => {
+    ReactDOM.render(
+      React.createElement(ReactRouterDOM.MemoryRouter, null, React.createElement(ReactBootstrap.Nav, null, navResult[0].children)),
+      navContainer
+    );
+  });
+  console.log('C2) nav link label is exactly "Marker":', navContainer.textContent.trim() === 'nativeMarker');
+  console.log('C3) nav link keeps its closed-captioning icon:', !!navContainer.querySelector('svg.nav-menu-icon'));
+
   const emotionCache = createEmotionCache({ key: 'css' });
   function Shell({ children }) {
     return React.createElement(
@@ -179,17 +201,32 @@ async function run() {
   }
   console.log('D) page rendered without crashing');
 
-  const pathInput = Array.from(container.querySelectorAll('input[type="text"]')).find((i) => i.placeholder.includes('/path/to'));
+  const pathInput = container.querySelector('.subtitle-markers-folder input');
   const searchInput = Array.from(container.querySelectorAll('input[type="text"]')).find((i) => i.placeholder.includes('subtitle lines'));
   const titleInput = Array.from(container.querySelectorAll('input[type="text"]')).find((i) => i.placeholder.includes('Marker title'));
-  console.log('E) path/search/title inputs present:', !!pathInput && !!searchInput && !!titleInput);
+  console.log('E) path (real FolderSelect)/search/title inputs present:', !!pathInput && !!searchInput && !!titleInput);
   console.log('F) real TagIDSelect (react-select) rendered:', !!container.querySelector('.tag-select, [class*="-control"]'));
+  console.log('F2) real FolderSelect shows the library path as a starting point:', container.textContent.includes('/lib'));
 
   const runButton = Array.from(container.querySelectorAll('button')).find((b) => b.textContent.includes('Search & Create Markers'));
   console.log('G) Run button starts disabled (no path/search/tag filled yet):', runButton.disabled === true);
 
+  // Navigate the real folder browser: click the library path, then the subfolder under it -
+  // the same clicking-through-tiles interaction a user gets, not typing a raw path by hand.
+  function folderTile(label) {
+    return Array.from(container.querySelectorAll('.folder-list-item button')).find((b) => b.textContent.trim() === label);
+  }
   await TestUtils.act(async () => {
-    TestUtils.Simulate.change(pathInput, { target: { value: '/lib/A' } });
+    TestUtils.Simulate.click(folderTile('/lib'));
+    await new Promise((r) => setTimeout(r, 20));
+  });
+  console.log('F3) navigating into /lib shows its real subfolder (/lib/A) from the Directory query:', !!folderTile('/lib/A'));
+  await TestUtils.act(async () => {
+    TestUtils.Simulate.click(folderTile('/lib/A'));
+  });
+  console.log('F4) FolderSelect\'s input reflects the folder navigated into:', pathInput.value === '/lib/A');
+
+  await TestUtils.act(async () => {
     TestUtils.Simulate.change(searchInput, { target: { value: 'knock knock' } });
   });
 

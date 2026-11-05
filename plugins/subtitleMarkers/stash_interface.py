@@ -77,3 +77,12 @@ mutation SceneMarkerCreate($input: SceneMarkerCreateInput!) {
             },
         )
         return data.get("sceneMarkerCreate")
+
+    def generate_marker_previews(self, marker_ids):
+        """Queues preview generation for the given markers. Returns the generate job's id."""
+        query = """
+mutation SubtitleMarkersGeneratePreviews($input: GenerateMetadataInput!) {
+  metadataGenerate(input: $input)
+}"""
+        data = self._gql(query, {"input": {"markers": True, "markerIDs": marker_ids}})
+        return data.get("metadataGenerate")

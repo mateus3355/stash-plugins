@@ -2,6 +2,7 @@ import * as GQL from "src/core/generated-graphql";
 import { ConfigurationProvider } from "src/hooks/Config";
 import { ToastProvider } from "src/hooks/Toast";
 import { TagIDSelect } from "src/components/Tags/TagSelect";
+import { FolderSelect } from "src/components/Shared/FolderSelect/FolderSelect";
 
 import type ReactNS from "react";
 
@@ -94,7 +95,7 @@ const STATUS_LABEL: Record<JobStatus, string> = {
   FAILED: "Failed.",
 };
 
-function SubtitleMarkersPage() {
+function SubtitleMarkersPage({ libraryPaths }: { libraryPaths: string[] }) {
   const [path, setPath] = useState("");
   const [search, setSearch] = useState("");
   const [tagId, setTagId] = useState("");
@@ -163,7 +164,8 @@ function SubtitleMarkersPage() {
         )}
         <p className={job.status === "FAILED" ? "text-danger" : "text-muted"}>
           {STATUS_LABEL[job.status]}
-          {job.status === "FINISHED" && " See Settings → Logs for how many markers were created."}
+          {job.status === "FINISHED" &&
+            " Marker preview generation has been queued for anything created. See Settings → Logs for how many markers were created."}
         </p>
         {job.error ? <Alert variant="danger">{job.error}</Alert> : null}
       </div>
@@ -176,19 +178,18 @@ function SubtitleMarkersPage() {
       <p className="text-muted">
         Searches every .srt file under a folder (and its subfolders) for a phrase, and creates a
         scene marker wherever it's found - matched to the video file next to each subtitle, the
-        same way Stash itself associates captions.
+        same way Stash itself associates captions. Marker preview generation is queued
+        automatically afterwards for anything created.
       </p>
 
-      <Form.Group>
-        <Form.Label>Folder path</Form.Label>
-        <Form.Control
-          type="text"
-          value={path}
-          placeholder="/path/to/library/folder"
-          onChange={(e: any) => setPath(e.target.value)}
-          disabled={jobRunning}
+      <Form.Group className="subtitle-markers-folder">
+        <Form.Label>Folder</Form.Label>
+        <FolderSelect
+          currentDirectory={path}
+          onChangeDirectory={setPath}
+          defaultDirectories={libraryPaths}
         />
-        <Form.Text className="text-muted">A server-side path, searched recursively.</Form.Text>
+        <Form.Text className="text-muted">Searched recursively, including subfolders.</Form.Text>
       </Form.Group>
 
       <Form.Group>
@@ -240,10 +241,11 @@ function SubtitleMarkersPage() {
 function SubtitleMarkersPageWithConfig() {
   const { data } = GQL.useConfigurationQuery();
   if (!data?.configuration) return <Spinner animation="border" className="mt-3" />;
+  const libraryPaths = data.configuration.general.stashes.map((s: { path: string }) => s.path);
   return (
     <ToastProvider>
       <ConfigurationProvider configuration={data.configuration}>
-        <SubtitleMarkersPage />
+        <SubtitleMarkersPage libraryPaths={libraryPaths} />
       </ConfigurationProvider>
     </ToastProvider>
   );
@@ -267,7 +269,7 @@ PluginApi.patch.before("MainNavBar.MenuItems", (props: any) => {
         <NavLink exact to={ROUTE_PATH} activeClassName="active">
           <Button className="minimal p-4 p-xl-2 d-flex d-xl-inline-block flex-column justify-content-between align-items-center">
             <FontAwesomeIcon icon={FA.faClosedCaptioning} className="fa-icon nav-menu-icon d-block d-xl-inline mb-2 mb-xl-0" />
-            <span>Subtitle Markers</span>
+            <span>Marker</span>
           </Button>
         </NavLink>
       </Nav.Link>
