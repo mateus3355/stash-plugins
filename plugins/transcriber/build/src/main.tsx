@@ -74,7 +74,7 @@ interface StatusResult {
   config: ServiceConfig | null;
 }
 
-type ControlAction = "start" | "stop" | "restart";
+type ControlAction = "start" | "stop" | "restart" | "clear";
 
 // ---------------------------------------------------------------------
 // GraphQL - plain fetch, same-origin so the browser's own session cookie
@@ -192,6 +192,13 @@ function TranscriberPage({ libraryPaths }: { libraryPaths: string[] }) {
       .then((r: StatusResult) => setResult(r))
       .catch((e: any) => setError(String(e && e.message ? e.message : e)))
       .finally(() => setBusyAction(null));
+  }
+
+  function handleClear() {
+    if (!window.confirm("Clear the status, failed-file history, and logs? This restarts the service.")) {
+      return;
+    }
+    handleControl("clear");
   }
 
   function handleApplyConfig() {
@@ -312,8 +319,11 @@ function TranscriberPage({ libraryPaths }: { libraryPaths: string[] }) {
         <Button onClick={() => handleControl("stop")} disabled={busy} variant="secondary" className="mr-2">
           {busyAction === "stop" ? "Stopping…" : "Stop"}
         </Button>
-        <Button onClick={() => handleControl("restart")} disabled={busy} variant="secondary">
+        <Button onClick={() => handleControl("restart")} disabled={busy} variant="secondary" className="mr-2">
           {busyAction === "restart" ? "Restarting…" : "Restart"}
+        </Button>
+        <Button onClick={handleClear} disabled={busy} variant="danger">
+          {busyAction === "clear" ? "Clearing…" : "Clear Status & Logs"}
         </Button>
       </div>
 

@@ -18,6 +18,10 @@ async function run() {
   window.matchMedia = window.matchMedia || function () {
     return { matches: false, media: '', onchange: null, addListener() {}, removeListener() {}, addEventListener() {}, removeEventListener() {}, dispatchEvent() { return false; } };
   };
+  // Controllable from the test below: Clear asks for confirmation first via window.confirm,
+  // which jsdom doesn't implement on its own.
+  let confirmReturnValue = true;
+  window.confirm = () => confirmReturnValue;
   global.IntersectionObserver = window.IntersectionObserver = class {
     observe() {} unobserve() {} disconnect() {} takeRecords() { return []; }
   };
@@ -113,6 +117,12 @@ async function run() {
     } else if (mode === 'configure') {
       serviceConfig = { inputDir: body.variables.args.inputDir, language: body.variables.args.language };
       data = { runPluginOperation: { ok: true, config: serviceConfig } };
+    } else if (mode === 'clear') {
+      for (const k of Object.keys(statusJson)) delete statusJson[k];
+      failedJson.count = 0;
+      failedJson.recent = [];
+      serviceActive = 'active';
+      data = { runPluginOperation: { ok: true } };
     } else {
       return Promise.resolve({ json: () => Promise.resolve({ errors: [{ message: 'unknown mode: ' + mode }] }) });
     }
@@ -226,6 +236,28 @@ async function run() {
   statusJson.files_done = 4;
   await new Promise((r) => setTimeout(r, 3100));
   console.log('O) status keeps refreshing on its own poll interval:', container.textContent.includes('4 / 10'));
+
+  // --- Clear status & logs - declining the confirmation does nothing ---
+  confirmReturnValue = false;
+  let clearButton = Array.from(container.querySelectorAll('button')).find((b) => b.textContent === 'Clear Status & Logs');
+  graphqlCalls.length = 0;
+  await TestUtils.act(async () => {
+    TestUtils.Simulate.click(clearButton);
+    await new Promise((r) => setTimeout(r, 20));
+  });
+  console.log('O2) declining the confirmation does not call runPluginOperation:', !graphqlCalls.some((c) => c.variables.args.mode === 'clear'));
+  console.log('O3) the failed file is still shown (nothing cleared):', container.textContent.includes('/lib/A/silent.mp4'));
+
+  // --- Clear status & logs - confirming clears status/failed and restarts ---
+  confirmReturnValue = true;
+  await TestUtils.act(async () => {
+    TestUtils.Simulate.click(clearButton);
+    await new Promise((r) => setTimeout(r, 20));
+  });
+  const clearCall = graphqlCalls.find((c) => c.variables.args.mode === 'clear');
+  console.log('O4) confirming Clear called runPluginOperation with mode "clear":', !!clearCall && clearCall.variables.plugin_id === 'transcriber');
+  console.log('O5) the failed-file list is gone after clearing:', !container.textContent.includes('/lib/A/silent.mp4') && !container.textContent.includes('failed file'));
+  console.log('O6) the current-file progress is gone after clearing:', !container.textContent.includes('Amadores/one.mp4'));
 
   // ---------------------------------------------------------------------
   // Folder/language picker - the real FolderSelect, seeded from the service's own config.

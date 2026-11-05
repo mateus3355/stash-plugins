@@ -7,6 +7,7 @@ out to systemctl, so Stash's Settings/a plugin page can show live progress
 and control it without SSHing in.
 """
 
+import glob
 import json
 import os
 import re
@@ -18,6 +19,9 @@ SERVICE_NAME = "transcriber.service"
 SERVICE_UNIT_PATH = f"/etc/systemd/system/{SERVICE_NAME}"
 INSTALL_SCRIPT = os.path.join(HERE, "install_service.sh")
 LANGUAGES = ("en", "pt", "auto")
+# transcriber.py's own default --log-file (see its argparse default) - RotatingFileHandler
+# with backupCount=5 means the actual files on disk are this plus .1 through .5.
+LOG_FILE = os.path.join(HERE, "logs", "transcriber.log")
 
 # Matches the ExecStart line install_service.sh writes: `... transcriber.py "<input>"
 # --language <code> --watch 300` - the quoted input dir and the language code right after it.
@@ -152,6 +156,29 @@ def configure(input_dir, language, run=None, unit_path=SERVICE_UNIT_PATH):
     return {"ok": True, "config": get_current_config(unit_path)}
 
 
+def clear(state_dir, run=None):
+    """Resets status.json/failed.json to empty and removes the log file (and its rotated
+    .1-.5 backups), then restarts the service. The restart matters: transcriber.py only reads
+    failed.json once at startup and keeps its own copy in memory from then on, periodically
+    writing that copy back out - clearing the files while it keeps running would just get
+    overwritten with the stale in-memory data on its very next write. Restarting makes it
+    start that in-memory state over empty, same as the files now are."""
+    run = run or subprocess.run
+    for name in ("status.json", "failed.json"):
+        path = os.path.join(state_dir, name)
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write("{}")
+        except OSError as e:
+            return {"error": f"could not clear {name}: {e}"}
+    for path in glob.glob(LOG_FILE + "*"):  # transcriber.log, transcriber.log.1, ...
+        try:
+            os.remove(path)
+        except OSError:
+            pass  # not fatal - clearing state/restarting still matters more than old logs
+    return control("restart", run=run)
+
+
 def main():
     json_input = json.loads(sys.stdin.read())
     args = json_input.get("args", {})
@@ -164,6 +191,8 @@ def main():
         result = control(mode)
     elif mode == "configure":
         result = configure(args.get("inputDir"), args.get("language", "en"))
+    elif mode == "clear":
+        result = clear(state_dir)
     else:
         result = {"error": f"unknown mode: {mode}"}
 

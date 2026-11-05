@@ -1,4 +1,5 @@
 import contextlib
+import glob
 import io
 import json
 import os
@@ -207,6 +208,74 @@ class ConfigureTests(unittest.TestCase):
         self.assertIn("error", result)
 
 
+class ClearTests(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmpdir.cleanup)
+        self.log_file = os.path.join(self.tmpdir.name, "logs", "transcriber.log")
+        os.makedirs(os.path.dirname(self.log_file))
+        patcher = unittest.mock.patch("plugin.LOG_FILE", self.log_file)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def write(self, name, content):
+        with open(os.path.join(self.tmpdir.name, name), "w", encoding="utf-8") as f:
+            f.write(content)
+
+    def test_resets_status_and_failed_to_empty(self):
+        self.write("status.json", json.dumps({"state": "transcribing", "files_done": 5}))
+        self.write("failed.json", json.dumps({"/a.mp4": {"error": "e"}}))
+        run = unittest.mock.Mock(return_value=FakeCompletedProcess(returncode=0))
+
+        plugin.clear(self.tmpdir.name, run=run)
+
+        self.assertEqual(plugin.read_json(os.path.join(self.tmpdir.name, "status.json"), None), {})
+        self.assertEqual(plugin.read_json(os.path.join(self.tmpdir.name, "failed.json"), None), {})
+
+    def test_removes_the_log_file_and_its_rotated_backups(self):
+        with open(self.log_file, "w") as f:
+            f.write("log line\n")
+        for i in range(1, 4):
+            with open(self.log_file + f".{i}", "w") as f:
+                f.write("old log\n")
+        run = unittest.mock.Mock(return_value=FakeCompletedProcess(returncode=0))
+
+        plugin.clear(self.tmpdir.name, run=run)
+
+        self.assertEqual(glob.glob(self.log_file + "*"), [])
+
+    def test_restarts_the_service_after_clearing(self):
+        run = unittest.mock.Mock(return_value=FakeCompletedProcess(returncode=0))
+        with unittest.mock.patch("os.geteuid", return_value=0):
+            result = plugin.clear(self.tmpdir.name, run=run)
+        self.assertEqual(result, {"ok": True})
+        run.assert_called_once_with(
+            ["systemctl", "restart", "transcriber.service"], capture_output=True, text=True, timeout=30,
+        )
+
+    def test_a_restart_failure_after_clearing_is_still_reported(self):
+        run = unittest.mock.Mock(return_value=FakeCompletedProcess(stderr="boom", returncode=1))
+        result = plugin.clear(self.tmpdir.name, run=run)
+        self.assertEqual(result, {"error": "boom"})
+
+    def test_tolerates_a_log_file_that_cannot_be_removed(self):
+        # A permission error (or the file simply not existing yet) removing old logs
+        # shouldn't block clearing the state files and restarting, which matter more.
+        with open(self.log_file, "w") as f:
+            f.write("log line\n")
+        run = unittest.mock.Mock(return_value=FakeCompletedProcess(returncode=0))
+        with unittest.mock.patch("os.remove", side_effect=OSError("permission denied")):
+            result = plugin.clear(self.tmpdir.name, run=run)
+        self.assertEqual(result, {"ok": True})
+
+    def test_a_status_file_that_cannot_be_written_is_reported_without_calling_systemctl(self):
+        run = unittest.mock.Mock()
+        with unittest.mock.patch("builtins.open", side_effect=OSError("disk full")):
+            result = plugin.clear(self.tmpdir.name, run=run)
+        self.assertIn("error", result)
+        run.assert_not_called()
+
+
 class GetStatusTests(unittest.TestCase):
     def setUp(self):
         self.tmpdir = tempfile.TemporaryDirectory()
@@ -343,6 +412,15 @@ class MainOutputEnvelopeTests(unittest.TestCase):
             printed = self.run_main({"mode": "configure", "inputDir": "/mnt/videos", "language": "fr"})
         self.assertIn("error", printed)
         run.assert_not_called()
+
+    def test_clear_mode_dispatches_to_clear(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with unittest.mock.patch("subprocess.run", return_value=FakeCompletedProcess(returncode=0)):
+                printed = self.run_main({"mode": "clear", "stateDir": tmp})
+            with open(os.path.join(tmp, "failed.json")) as f:
+                self.assertEqual(json.load(f), {})
+        self.assertIn("output", printed)
+        self.assertTrue(printed["output"]["ok"])
 
 
 if __name__ == "__main__":

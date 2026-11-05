@@ -26,6 +26,15 @@ Pairs naturally with the **Subtitle Markers** plugin in this same repo -
   so only a count and a capped, most-recent-first sample are ever sent over
   the wire. See `plugin.py`'s `RECENT_FAILED_LIMIT`.
 - **Start** / **Stop** / **Restart** buttons for `transcriber.service`.
+- A **Clear Status & Logs** button - asks for confirmation, then resets
+  `status.json`/`failed.json` to empty, deletes `logs/transcriber.log` (and
+  its rotated `.1`-`.5` backups), and restarts the service. The restart is
+  necessary, not optional: `transcriber.py` only reads `failed.json` once at
+  startup and keeps its own in-memory copy from then on, so clearing the
+  files without restarting would just get overwritten by its very next
+  write. Useful after clearing out a batch of real failures (e.g. once
+  you've fixed whatever was causing them) instead of waiting for them to
+  scroll out of the "most recent" list naturally.
 - A **folder/language picker** - the same real folder browser Subtitle
   Markers' own picker uses, seeded with the currently watched folder/
   language. Applying it re-runs `install_service.sh` as root, same as
