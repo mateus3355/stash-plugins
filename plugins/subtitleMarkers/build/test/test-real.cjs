@@ -357,6 +357,61 @@ async function run() {
   TestUtils.Simulate.click(stopButton);
   console.log('AI) Stop clears the queue and removes the widget:', window.sessionStorage.getItem('subtitleMarkersQueue') === null && !document.getElementById('subtitle-markers-queue-widget'));
 
+  // ---------------------------------------------------------------------
+  // Regression: the auto-advance preview timer used to run on a fixed wall-clock schedule
+  // regardless of whether the video was actually playing - pausing to read/think didn't stop
+  // the countdown, so it could silently fire (and, for a same-scene advance, force-call
+  // video.play()) moments later, "unpausing" a video the user had deliberately paused. It's
+  // now driven by the video's own play/pause events instead. Speeds up just this plugin's
+  // preview-countdown setTimeout calls (20000ms) so the test doesn't really wait 20s - other
+  // timers (e.g. the job-polling interval later in this file) are left alone.
+  // ---------------------------------------------------------------------
+  const realSetTimeout = window.setTimeout;
+  window.setTimeout = (cb, delay, ...args) => (delay === 20000 ? realSetTimeout(cb, 40, ...args) : realSetTimeout(cb, delay, ...args));
+
+  // jsdom doesn't implement real media playback - dispatching a "play"/"pause" Event alone
+  // doesn't change a <video>'s own .paused (it stays permanently true, the default, since
+  // nothing ever really plays) - .paused itself has to be driven the same way for these two
+  // simulated helpers to mean what they say.
+  let videoPlaying = false;
+  Object.defineProperty(video, 'paused', { get: () => !videoPlaying, configurable: true });
+  function simulatePlay() {
+    videoPlaying = true;
+    video.dispatchEvent(new window.Event('play'));
+  }
+  function simulatePause() {
+    videoPlaying = false;
+    video.dispatchEvent(new window.Event('pause'));
+  }
+
+  window.history.pushState({}, '', '/scenes/scene-1');
+  window.sessionStorage.setItem('subtitleMarkersQueue', JSON.stringify({ items: queueAfterPlayAll.items, index: 0 }));
+  nudgeObserver();
+  await new Promise((r) => realSetTimeout(r, 0));
+
+  video.currentTime = 12.5;
+  simulatePlay();
+  simulatePause();
+  // Paused immediately after playing - well past the (sped-up) countdown, confirm it never
+  // fired: still on the first item, video untouched.
+  await new Promise((r) => realSetTimeout(r, 60));
+  console.log(
+    'AJ) pausing cancels the pending auto-advance - it does not fire while paused:',
+    JSON.parse(window.sessionStorage.getItem('subtitleMarkersQueue')).index === 0 && video.currentTime === 12.5
+  );
+
+  // Resuming starts a fresh countdown, which (still playing throughout) does fire this time.
+  simulatePlay();
+  await new Promise((r) => realSetTimeout(r, 60));
+  console.log(
+    'AK) resuming schedules a new countdown, which fires (and only now) while actually playing:',
+    JSON.parse(window.sessionStorage.getItem('subtitleMarkersQueue')).index === 1 && video.currentTime === 40
+  );
+
+  window.setTimeout = realSetTimeout;
+  window.sessionStorage.clear();
+  document.getElementById('subtitle-markers-queue-widget')?.remove();
+
   // Clean up the injected video-js fixture and go back to the search page's own route before
   // the rest of the test continues interacting with `container`.
   videoJsContainer.remove();

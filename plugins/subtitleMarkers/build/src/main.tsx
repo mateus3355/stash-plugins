@@ -522,8 +522,44 @@ function handleQueueVideoEnded(e: Event) {
   if (!queue || queue.items[queue.index].sceneId !== currentQueueSceneId()) return;
   goToQueueIndex(queue, queue.index + 1);
 }
-// capture: true - "ended" doesn't bubble, so a listener on document only ever sees it this way.
+
+// Starts (or restarts) the preview countdown - called whenever the video actually starts
+// playing (including an autoplay-triggered start), never on a fixed schedule independent of
+// playback. Pausing to read/think no longer costs anything off the countdown; it's just not
+// running while paused, same as the preview itself isn't advancing.
+function scheduleQueueAdvance() {
+  clearQueueAdvanceTimer();
+  const queue = loadQueue();
+  if (!queue || queue.items[queue.index].sceneId !== currentQueueSceneId()) return;
+  queueAdvanceTimer = setTimeout(() => {
+    queueAdvanceTimer = null;
+    const latest = loadQueue();
+    if (!latest || latest.items[latest.index].sceneId !== currentQueueSceneId()) return;
+    // Belt and suspenders: the pause handler below should already have cleared this timer,
+    // but never advance (and never call .play() from goToQueueIndex) on a paused video.
+    const video = document.querySelector<HTMLVideoElement>(".video-js video");
+    if (video && video.paused) return;
+    goToQueueIndex(latest, latest.index + 1);
+  }, QUEUE_PREVIEW_SECONDS * 1000);
+}
+
+function handleQueueVideoPlay(e: Event) {
+  const target = e.target as HTMLElement | null;
+  if (!target || target.tagName !== "VIDEO") return;
+  scheduleQueueAdvance();
+}
+
+function handleQueueVideoPause(e: Event) {
+  const target = e.target as HTMLElement | null;
+  if (!target || target.tagName !== "VIDEO") return;
+  clearQueueAdvanceTimer();
+}
+
+// capture: true - none of "ended"/"play"/"pause" bubble, so a listener on document only ever
+// sees them this way.
 document.addEventListener("ended", handleQueueVideoEnded, true);
+document.addEventListener("play", handleQueueVideoPlay, true);
+document.addEventListener("pause", handleQueueVideoPause, true);
 
 function ensureQueueWidget() {
   try {
@@ -542,21 +578,24 @@ function ensureQueueWidget() {
     }
 
     // This runs on every DOM mutation the observer below sees - constantly, during playback
-    // (time display, buffered bar, etc). Only re-render (and reschedule the auto-advance
-    // timer) when the item actually being shown changed.
+    // (time display, buffered bar, etc). Only re-render when the item actually being shown
+    // changed - the auto-advance timer itself is scheduled from the video's own "play" event
+    // (handleQueueVideoPlay above), not from here, so it only ever runs while actually playing.
     const key = sceneId + ":" + queue.index;
     if (widget.dataset.subtitleMarkersQueueKey === key) return;
     widget.dataset.subtitleMarkersQueueKey = key;
 
     const item = queue.items[queue.index];
-    clearQueueAdvanceTimer();
-    queueAdvanceTimer = setTimeout(() => {
-      queueAdvanceTimer = null;
-      const latest = loadQueue();
-      if (latest && latest.items[latest.index].sceneId === currentQueueSceneId()) {
-        goToQueueIndex(latest, latest.index + 1);
-      }
-    }, QUEUE_PREVIEW_SECONDS * 1000);
+    // Covers a video that was already playing (autoplay already fired its "play" event,
+    // perhaps before this key even changed) when this item became current - schedules
+    // nothing new if it's paused (nothing to override: handleQueueVideoPlay will pick it up
+    // whenever it next actually starts).
+    const existingVideo = document.querySelector<HTMLVideoElement>(".video-js video");
+    if (existingVideo && !existingVideo.paused) {
+      scheduleQueueAdvance();
+    } else {
+      clearQueueAdvanceTimer();
+    }
 
     const widgetStyle: Record<string, string> = {
       position: "fixed",
