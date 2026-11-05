@@ -18,12 +18,17 @@ async function run() {
   window.matchMedia = window.matchMedia || function () {
     return { matches: false, media: '', onchange: null, addListener() {}, removeListener() {}, addEventListener() {}, removeEventListener() {}, dispatchEvent() { return false; } };
   };
+  global.IntersectionObserver = window.IntersectionObserver = class {
+    observe() {} unobserve() {} disconnect() {} takeRecords() { return []; }
+  };
 
   const React = require('react');
   const ReactDOM = require('react-dom');
   const TestUtils = require('react-dom/test-utils');
   const ReactBootstrap = require('react-bootstrap');
+  const ReactIntl = require('react-intl');
   const ReactRouterDOM = require('react-router-dom');
+  const Apollo = require('@apollo/client');
   const FontAwesomeSolid = require('@fortawesome/free-solid-svg-icons');
   const { FontAwesomeIcon } = require('@fortawesome/react-fontawesome');
 
@@ -41,6 +46,51 @@ async function run() {
     audio_hours_transcribed: 1.25,
   };
   const failedJson = { count: 1, recent: [{ path: '/lib/A/silent.mp4', error: 'NoAudio: video has no audio stream', when: '2026-01-01T00:00:00' }] };
+  // The currently configured folder/language - what plugin.py's get_current_config() would
+  // parse back out of the real transcriber.service unit file.
+  let serviceConfig = { inputDir: '/lib/A', language: 'en' };
+
+  const configuration = {
+    __typename: 'ConfigResult',
+    general: { __typename: 'ConfigGeneralResult', stashes: [{ __typename: 'StashConfig', path: '/lib', excludeVideo: false, excludeImage: false }], databasePath: '', backupDirectoryPath: '', generatedPath: '', metadataPath: '', scrapersPath: '', pluginsPath: '', cachePath: '', calculateMD5: true, videoFileNamingAlgorithm: 'OSHASH', parallelTasks: 1, previewAudio: true, previewSegments: 12, previewSegmentDuration: 0.75, previewExcludeStart: '0', previewExcludeEnd: '0', previewPreset: 'SLOW', maxTranscodeSize: null, maxStreamingTranscodeSize: null, writeImageThumbnails: true, apiKey: '', username: '', password: '', maxSessionAge: 0, logFile: null, logOut: true, logLevel: 'Info', logAccessLevel: 'Info', createGalleriesFromFolders: false, galleryCoverRegex: '', videoExtensions: [], imageExtensions: [], galleryExtensions: [], gallery_cover_regex: '', excludes: [], imageExcludes: [], customPerformerImageLocation: null, scraperUserAgent: null, scraperCertCheck: true, scraperCDPPath: null, stashBoxes: [], transcodeHardwareAcceleration: false, transcodeInputArgs: [], transcodeOutputArgs: [], liveTranscodeInputArgs: [], liveTranscodeOutputArgs: [], drawFunscriptHeatmapRange: true, transcodeHevcCopyForHlsEnabled: false },
+    interface: { __typename: 'ConfigInterfaceResult', menuItems: ['scenes', 'images', 'galleries', 'performers', 'tags', 'studios', 'groups'], soundOnPreview: false, wallShowTitle: true, showStudioAsText: false, css: null, cssEnabled: false, javascript: null, javascriptEnabled: false, customLocales: null, customLocalesEnabled: false, language: 'en-US', slideshowDelay: 5000, imageLightboxOptions: { __typename: 'ConfigImageLightboxResult', slideshowDelay: 5000, displayMode: 'FIT_XY', scaleUp: false, resetZoomOnNav: false, scrollMode: 'ZOOM', scrollAttemptsBeforeChange: 5 }, disabledDropdownCreate: {}, disableDropdownCreate: { __typename: 'ConfigDisableDropdownCreate', performer: false, studio: false, tag: false, movie: false }, handyKey: null, funscriptOffset: 0, useStashHostedFunscript: false, continuePlaylistDefault: false, noBrowser: false, notificationsEnabled: true, showScrubber: true, disableCustomizations: false },
+    dlna: { __typename: 'ConfigDLNAResult', serverName: '', enabled: false, whitelistedIPs: [], interfaces: [], videoSortOrder: 'title' },
+    scraping: { __typename: 'ConfigScrapingResult', scraperUserAgent: null, scraperCertCheck: true, scraperCDPPath: null, excludeTagPatterns: [] },
+    defaults: { __typename: 'ConfigDefaultSettingsResult', scan: null, autoTag: null, generate: null, deleteFile: false, deleteGenerated: true },
+    ui: { maxOptionsShown: 200, ratingSystemOptions: { type: 'decimal', starPrecision: 'full' } },
+    plugins: {},
+  };
+
+  // The library's filesystem, for FolderSelect's own Directory query to browse.
+  const directories = {
+    '': { path: '', parent: null, directories: ['/lib'] },
+    '/lib': { path: '/lib', parent: '', directories: ['/lib/A', '/lib/B'] },
+  };
+
+  const apolloCalls = [];
+  const apolloLink = new Apollo.ApolloLink((operation) => {
+    return new Apollo.Observable((observer) => {
+      const name = operation.operationName;
+      apolloCalls.push({ name, variables: operation.variables });
+      try {
+        let data;
+        if (name === 'Configuration') {
+          data = { configuration };
+        } else if (name === 'Directory') {
+          const path = (operation.variables && operation.variables.path) || '';
+          const dir = directories[path] || { path, parent: null, directories: [] };
+          data = { directory: { __typename: 'Directory', ...dir } };
+        } else {
+          throw new Error('unmocked apollo operation: ' + name);
+        }
+        observer.next({ data });
+        observer.complete();
+      } catch (e) {
+        observer.error(e);
+      }
+    });
+  });
+  const apolloClient = new Apollo.ApolloClient({ link: apolloLink, cache: new Apollo.InMemoryCache() });
 
   const graphqlCalls = [];
   window.fetch = function (url, opts) {
@@ -53,13 +103,16 @@ async function run() {
     const mode = body.variables.args.mode;
     let data;
     if (mode === 'status') {
-      data = { runPluginOperation: { status: statusJson, failed: failedJson, serviceActive } };
+      data = { runPluginOperation: { status: statusJson, failed: failedJson, serviceActive, config: serviceConfig } };
     } else if (mode === 'start' || mode === 'restart') {
       serviceActive = 'active';
       data = { runPluginOperation: { ok: true } };
     } else if (mode === 'stop') {
       serviceActive = 'inactive';
       data = { runPluginOperation: { ok: true } };
+    } else if (mode === 'configure') {
+      serviceConfig = { inputDir: body.variables.args.inputDir, language: body.variables.args.language };
+      data = { runPluginOperation: { ok: true, config: serviceConfig } };
     } else {
       return Promise.resolve({ json: () => Promise.resolve({ errors: [{ message: 'unknown mode: ' + mode }] }) });
     }
@@ -69,7 +122,7 @@ async function run() {
   window.PluginApi = {
     React, ReactDOM,
     libraries: {
-      ReactRouterDOM, Bootstrap: ReactBootstrap,
+      ReactRouterDOM, Bootstrap: ReactBootstrap, Apollo, Intl: ReactIntl,
       FontAwesomeSolid, ReactFontAwesome: { FontAwesomeIcon },
     },
     register: { route: (path, component) => { window.__registeredPath = path; window.__registeredComponent = component; } },
@@ -97,6 +150,14 @@ async function run() {
   });
   console.log('C2) nav link label is "Transcriber":', navContainer.textContent.trim() === 'nativeTranscriber');
 
+  function Shell({ children }) {
+    return React.createElement(
+      ReactIntl.IntlProvider,
+      { locale: 'en', messages: {}, onError: () => {} },
+      React.createElement(Apollo.ApolloProvider, { client: apolloClient }, children)
+    );
+  }
+
   const Page = window.__registeredComponent;
   const container = document.createElement('div');
   document.body.appendChild(container);
@@ -104,8 +165,8 @@ async function run() {
   let renderError = null;
   try {
     await TestUtils.act(async () => {
-      ReactDOM.render(React.createElement(ReactRouterDOM.MemoryRouter, null, React.createElement(Page)), container);
-      await new Promise((r) => setTimeout(r, 20));
+      ReactDOM.render(React.createElement(Shell, null, React.createElement(ReactRouterDOM.MemoryRouter, null, React.createElement(Page))), container);
+      await new Promise((r) => setTimeout(r, 50));
     });
   } catch (e) {
     renderError = e;
@@ -145,12 +206,13 @@ async function run() {
   console.log('M) the service badge reflects "active" again after starting:', container.textContent.includes('active') && !container.textContent.includes('inactive'));
 
   // --- A failed control action surfaces its error, not a crash ---
+  const previousFetch = window.fetch;
   window.fetch = function (url, opts) {
     const body = JSON.parse(opts.body);
     if (/TranscriberOperation/.test(body.query) && body.variables.args.mode === 'restart') {
       return Promise.resolve({ json: () => Promise.resolve({ errors: [{ message: 'sudo: a password is required' }] }) });
     }
-    return Promise.resolve({ json: () => Promise.resolve({ data: { runPluginOperation: { status: statusJson, failed: failedJson, serviceActive } } }) });
+    return previousFetch(url, opts);
   };
   const restartButton = Array.from(container.querySelectorAll('button')).find((b) => b.textContent === 'Restart');
   await TestUtils.act(async () => {
@@ -158,11 +220,80 @@ async function run() {
     await new Promise((r) => setTimeout(r, 20));
   });
   console.log('N) a failed control action shows its error instead of crashing:', container.textContent.includes('sudo: a password is required'));
+  window.fetch = previousFetch;
 
   // --- Keeps polling on its own (not just after a button click) ---
   statusJson.files_done = 4;
   await new Promise((r) => setTimeout(r, 3100));
   console.log('O) status keeps refreshing on its own poll interval:', container.textContent.includes('4 / 10'));
+
+  // ---------------------------------------------------------------------
+  // Folder/language picker - the real FolderSelect, seeded from the service's own config.
+  // ---------------------------------------------------------------------
+
+  const pathInput = container.querySelector('.transcriber-folder input');
+  console.log('P) real FolderSelect is shown for the watched folder:', !!pathInput);
+  console.log('Q) it is seeded with the currently configured folder, not blank:', pathInput.value === '/lib/A');
+
+  const languageSelect = container.querySelector('.transcriber-language select');
+  console.log('R) language dropdown is seeded with the currently configured language:', !!languageSelect && languageSelect.value === 'en');
+
+  let applyButton = Array.from(container.querySelectorAll('button')).find((b) => b.textContent === 'Apply');
+  console.log('S) Apply starts disabled - nothing changed yet:', !!applyButton && applyButton.disabled === true);
+
+  function folderTile(label) {
+    return Array.from(container.querySelectorAll('.folder-list-item button')).find((b) => b.textContent.trim() === label);
+  }
+  await TestUtils.act(async () => {
+    TestUtils.Simulate.click(folderTile('/lib'));
+    await new Promise((r) => setTimeout(r, 20));
+  });
+  await TestUtils.act(async () => {
+    TestUtils.Simulate.click(folderTile('/lib/B'));
+  });
+  console.log('T) navigating the real folder browser updates the picker input:', pathInput.value === '/lib/B');
+
+  applyButton = Array.from(container.querySelectorAll('button')).find((b) => b.textContent === 'Apply');
+  console.log('U) Apply becomes enabled once the folder actually changed:', applyButton.disabled === false);
+
+  graphqlCalls.length = 0;
+  await TestUtils.act(async () => {
+    TestUtils.Simulate.click(applyButton);
+    await new Promise((r) => setTimeout(r, 20));
+  });
+  const configureCall = graphqlCalls.find((c) => c.variables.args.mode === 'configure');
+  console.log(
+    'V) clicking Apply called runPluginOperation with mode "configure" and the new folder:',
+    !!configureCall && configureCall.variables.plugin_id === 'transcriber' && configureCall.variables.args.inputDir === '/lib/B' && configureCall.variables.args.language === 'en'
+  );
+  console.log('W) shows a confirmation after applying:', container.textContent.includes('watching this folder'));
+
+  applyButton = Array.from(container.querySelectorAll('button')).find((b) => b.textContent === 'Apply');
+  console.log('X) Apply goes back to disabled once applied (form matches the new config again):', applyButton.disabled === true);
+
+  // --- A failed configure call surfaces its error, not a crash ---
+  const fetchBeforeFailure = window.fetch;
+  window.fetch = function (url, opts) {
+    const body = JSON.parse(opts.body);
+    if (/TranscriberOperation/.test(body.query) && body.variables.args.mode === 'configure') {
+      return Promise.resolve({ json: () => Promise.resolve({ errors: [{ message: 'ERROR: folder not found: /lib/C' }] }) });
+    }
+    return fetchBeforeFailure(url, opts);
+  };
+  await TestUtils.act(async () => {
+    // FolderSelect's input reads e.currentTarget.value (not e.target.value) - React's
+    // TestUtils.Simulate only overrides the synthetic event's `target`, not `currentTarget`
+    // (which stays bound to the real node), so the node's own value has to be set directly.
+    pathInput.value = '/lib/C';
+    TestUtils.Simulate.change(pathInput);
+  });
+  applyButton = Array.from(container.querySelectorAll('button')).find((b) => b.textContent === 'Apply');
+  await TestUtils.act(async () => {
+    TestUtils.Simulate.click(applyButton);
+    await new Promise((r) => setTimeout(r, 20));
+  });
+  console.log('Y) a failed configure call shows its error instead of crashing:', container.textContent.includes('folder not found: /lib/C'));
+  window.fetch = fetchBeforeFailure;
 }
 
 run().then(() => process.exit(0)).catch((e) => { console.error('FATAL', e); process.exit(1); });

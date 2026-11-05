@@ -1,3 +1,6 @@
+import * as GQL from "src/core/generated-graphql";
+import { FolderSelect } from "src/components/Shared/FolderSelect/FolderSelect";
+
 import type ReactNS from "react";
 
 declare global {
@@ -13,10 +16,16 @@ const { PluginApi } = window;
 const { React } = PluginApi;
 const { useState, useEffect } = React;
 const Bootstrap = PluginApi.libraries.Bootstrap;
-const { Nav, Button, ProgressBar, Alert, Badge } = Bootstrap;
+const { Nav, Button, Form, ProgressBar, Alert, Badge } = Bootstrap;
 const { NavLink } = PluginApi.libraries.ReactRouterDOM;
 const { FontAwesomeIcon } = PluginApi.libraries.ReactFontAwesome;
 const FA = PluginApi.libraries.FontAwesomeSolid;
+
+const LANGUAGES: { value: string; label: string }[] = [
+  { value: "en", label: "English" },
+  { value: "pt", label: "Portuguese" },
+  { value: "auto", label: "Auto-detect" },
+];
 
 // Must match the plugin's yml filename (without extension) - that's how Stash derives a
 // plugin's id (pkg/plugin/config.go, loadPluginFromYAMLFile).
@@ -50,12 +59,19 @@ interface FailedEntry {
   when: string | null;
 }
 
+interface ServiceConfig {
+  inputDir: string;
+  language: string;
+}
+
 interface StatusResult {
   status: StatusJson | null;
   // failed.json can hold thousands of entries over a large library - plugin.py sends a
   // count plus a capped, most-recent-first sample, not the whole thing, every poll.
   failed: { count: number; recent: FailedEntry[] };
   serviceActive: string;
+  // null if transcriber.service hasn't been installed yet (install_service.sh never run).
+  config: ServiceConfig | null;
 }
 
 type ControlAction = "start" | "stop" | "restart";
@@ -100,6 +116,13 @@ function controlService(action: ControlAction): Promise<void> {
   return runPluginOperation({ mode: action }).then(() => undefined);
 }
 
+// Re-runs install_service.sh with a new folder/language - that script rewrites the systemd
+// unit and restarts the service, so this can take a while the first time it needs to rebuild
+// the venv (plugin.py gives it a generous timeout rather than a short one that looks hung).
+function configureService(inputDir: string, language: string): Promise<{ ok: boolean; config: ServiceConfig | null }> {
+  return runPluginOperation({ mode: "configure", inputDir, language });
+}
+
 // ---------------------------------------------------------------------
 // Page component
 // ---------------------------------------------------------------------
@@ -116,10 +139,20 @@ function serviceBadgeVariant(serviceActive: string) {
   return SERVICE_BADGE_VARIANT[serviceActive] || (serviceActive.startsWith("unknown") ? "secondary" : "danger");
 }
 
-function TranscriberPage() {
+function TranscriberPage({ libraryPaths }: { libraryPaths: string[] }) {
   const [result, setResult] = useState<StatusResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busyAction, setBusyAction] = useState<ControlAction | null>(null);
+
+  // The folder/language form - seeded once from the service's current config (the first poll
+  // that returns one), then left alone so typing/picking here never gets clobbered by a later
+  // poll overwriting it mid-edit.
+  const [configLoaded, setConfigLoaded] = useState(false);
+  const [path, setPath] = useState("");
+  const [language, setLanguage] = useState("en");
+  const [applying, setApplying] = useState(false);
+  const [configError, setConfigError] = useState<string | null>(null);
+  const [configMessage, setConfigMessage] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -129,6 +162,13 @@ function TranscriberPage() {
           if (cancelled) return;
           setResult(r);
           setError(null);
+          if (!configLoaded) {
+            if (r.config) {
+              setPath(r.config.inputDir);
+              setLanguage(r.config.language);
+            }
+            setConfigLoaded(true);
+          }
         })
         .catch((e: any) => {
           if (cancelled) return;
@@ -141,6 +181,7 @@ function TranscriberPage() {
       cancelled = true;
       clearInterval(timer);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   function handleControl(action: ControlAction) {
@@ -153,10 +194,27 @@ function TranscriberPage() {
       .finally(() => setBusyAction(null));
   }
 
+  function handleApplyConfig() {
+    setApplying(true);
+    setConfigError(null);
+    setConfigMessage(null);
+    configureService(path, language)
+      .then(() => fetchStatus())
+      .then((r: StatusResult) => {
+        setResult(r);
+        setConfigMessage("Applied - the service restarted and is now watching this folder.");
+      })
+      .catch((e: any) => setConfigError(String(e && e.message ? e.message : e)))
+      .finally(() => setApplying(false));
+  }
+
   const status = result && result.status;
   const failed = result && result.failed;
   const serviceActive = result && result.serviceActive;
+  const currentConfig = result && result.config;
   const busy = !!busyAction;
+  const configDirty =
+    configLoaded && (path !== (currentConfig ? currentConfig.inputDir : "") || language !== (currentConfig ? currentConfig.language : "en"));
 
   function renderServiceBadge() {
     if (!serviceActive) return null;
@@ -261,15 +319,57 @@ function TranscriberPage() {
 
       {renderStatus()}
       {renderFailed()}
+
+      <hr />
+      <h5>Watched folder</h5>
+      <p className="text-muted">
+        Changing this re-runs <code>install_service.sh</code> as root (via the same sudoers
+        rule as Start/Stop/Restart) and restarts the service - it can take a few minutes the
+        first time if its venv needs rebuilding, otherwise it's quick.
+      </p>
+
+      {configError ? <Alert variant="danger">{configError}</Alert> : null}
+      {configMessage ? <Alert variant="success">{configMessage}</Alert> : null}
+
+      <Form.Group className="transcriber-folder">
+        <Form.Label>Folder</Form.Label>
+        <FolderSelect currentDirectory={path} onChangeDirectory={setPath} defaultDirectories={libraryPaths} />
+      </Form.Group>
+
+      <Form.Group className="transcriber-language">
+        <Form.Label>Language</Form.Label>
+        <Form.Control as="select" value={language} onChange={(e: any) => setLanguage(e.target.value)} disabled={applying}>
+          {LANGUAGES.map((l) => (
+            <option key={l.value} value={l.value}>
+              {l.label}
+            </option>
+          ))}
+        </Form.Control>
+      </Form.Group>
+
+      <Button onClick={handleApplyConfig} disabled={applying || !path || !configDirty}>
+        {applying ? "Applying…" : "Apply"}
+      </Button>
     </div>
   );
+}
+
+// FolderSelect needs libraryPaths (the configured library stashes, for its default shortcut
+// list) - fetched with the same real Apollo-backed GQL.useConfigurationQuery() Subtitle
+// Markers' own folder picker uses, which works here with no extra Provider since Apollo/Intl
+// already come from the host app's own tree (unlike TagSelect elsewhere, FolderSelect doesn't
+// need a plugin-local Context of its own).
+function TranscriberPageWithConfig() {
+  const { data } = GQL.useConfigurationQuery();
+  const libraryPaths = data?.configuration ? data.configuration.general.stashes.map((s: { path: string }) => s.path) : [];
+  return <TranscriberPage libraryPaths={libraryPaths} />;
 }
 
 // ---------------------------------------------------------------------
 // Registration: nav link + route
 // ---------------------------------------------------------------------
 
-PluginApi.register.route(ROUTE_PATH, TranscriberPage);
+PluginApi.register.route(ROUTE_PATH, TranscriberPageWithConfig);
 
 // MainNavBar.MenuItems is a real PatchComponent (just <Nav>{children}</Nav>) - before() lets
 // us append an extra child to props.children. This runs on EVERY page (the nav bar is

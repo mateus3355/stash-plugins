@@ -2,6 +2,7 @@ import contextlib
 import io
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -70,6 +71,112 @@ class SummarizeFailedTests(unittest.TestCase):
         self.assertEqual(result["count"], 1)
 
 
+class GetCurrentConfigTests(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmpdir.cleanup)
+
+    def write_unit(self, content):
+        path = os.path.join(self.tmpdir.name, "transcriber.service")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(content)
+        return path
+
+    def test_missing_unit_file_returns_none(self):
+        self.assertIsNone(plugin.get_current_config(os.path.join(self.tmpdir.name, "nope.service")))
+
+    def test_parses_input_dir_language_and_user_from_a_real_unit(self):
+        path = self.write_unit(
+            "[Service]\n"
+            "User=mateus\n"
+            'ExecStart=/opt/transcriber/venv/bin/python /opt/transcriber/transcriber.py "/mnt/videos" --language pt --watch 300\n'
+        )
+        self.assertEqual(
+            plugin.get_current_config(path),
+            {"inputDir": "/mnt/videos", "language": "pt", "user": "mateus"},
+        )
+
+    def test_unit_without_a_matching_execstart_returns_none(self):
+        path = self.write_unit("[Service]\nExecStart=/bin/true\n")
+        self.assertIsNone(plugin.get_current_config(path))
+
+    def test_missing_user_line_is_tolerated(self):
+        path = self.write_unit('ExecStart=/x/transcriber.py "/mnt/videos" --language en --watch 300\n')
+        self.assertEqual(plugin.get_current_config(path), {"inputDir": "/mnt/videos", "language": "en"})
+
+
+class ConfigureTests(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmpdir.cleanup)
+        self.unit_path = os.path.join(self.tmpdir.name, "transcriber.service")
+
+    def write_unit(self, content):
+        with open(self.unit_path, "w", encoding="utf-8") as f:
+            f.write(content)
+
+    def test_rejects_a_missing_input_dir_without_calling_sudo(self):
+        run = unittest.mock.Mock()
+        result = plugin.configure("", "en", run=run, unit_path=self.unit_path)
+        self.assertIn("error", result)
+        run.assert_not_called()
+
+    def test_rejects_an_unsupported_language_without_calling_sudo(self):
+        run = unittest.mock.Mock()
+        result = plugin.configure("/mnt/videos", "fr", run=run, unit_path=self.unit_path)
+        self.assertIn("error", result)
+        run.assert_not_called()
+
+    def test_calls_install_script_via_sudo_with_the_existing_user_preserved(self):
+        self.write_unit(
+            "[Service]\nUser=mateus\n"
+            'ExecStart=/x/transcriber.py "/old/path" --language en --watch 300\n'
+        )
+        run = unittest.mock.Mock(return_value=FakeCompletedProcess(returncode=0))
+        plugin.configure("/mnt/videos", "pt", run=run, unit_path=self.unit_path)
+        run.assert_called_once_with(
+            ["sudo", "-n", plugin.INSTALL_SCRIPT, "/mnt/videos", "pt", "mateus"],
+            capture_output=True, text=True, timeout=900,
+        )
+
+    def test_omits_the_user_argument_when_not_previously_installed(self):
+        run = unittest.mock.Mock(return_value=FakeCompletedProcess(returncode=0))
+        plugin.configure("/mnt/videos", "en", run=run, unit_path=self.unit_path)
+        run.assert_called_once_with(
+            ["sudo", "-n", plugin.INSTALL_SCRIPT, "/mnt/videos", "en"],
+            capture_output=True, text=True, timeout=900,
+        )
+
+    def test_success_returns_the_newly_written_config(self):
+        def fake_run(args, **kwargs):
+            self.write_unit(
+                f'ExecStart=/x/transcriber.py "{args[-2]}" --language {args[-1]} --watch 300\n'
+            )
+            return FakeCompletedProcess(returncode=0)
+
+        result = plugin.configure("/mnt/videos", "pt", run=fake_run, unit_path=self.unit_path)
+        self.assertEqual(result, {"ok": True, "config": {"inputDir": "/mnt/videos", "language": "pt"}})
+
+    def test_a_nonzero_exit_is_reported_as_an_error_with_the_actual_message(self):
+        run = unittest.mock.Mock(return_value=FakeCompletedProcess(stderr="ERROR: folder not found: /mnt/videos", returncode=1))
+        result = plugin.configure("/mnt/videos", "en", run=run, unit_path=self.unit_path)
+        self.assertEqual(result, {"error": "ERROR: folder not found: /mnt/videos"})
+
+    def test_a_timeout_is_reported_not_raised(self):
+        def raising_run(*args, **kwargs):
+            raise subprocess.TimeoutExpired(cmd="install_service.sh", timeout=900)
+
+        result = plugin.configure("/mnt/videos", "en", run=raising_run, unit_path=self.unit_path)
+        self.assertIn("error", result)
+
+    def test_an_unexpected_exception_is_reported_not_raised(self):
+        def raising_run(*args, **kwargs):
+            raise FileNotFoundError("sudo not found")
+
+        result = plugin.configure("/mnt/videos", "en", run=raising_run, unit_path=self.unit_path)
+        self.assertIn("error", result)
+
+
 class GetStatusTests(unittest.TestCase):
     def setUp(self):
         self.tmpdir = tempfile.TemporaryDirectory()
@@ -105,6 +212,19 @@ class GetStatusTests(unittest.TestCase):
 
         result = plugin.get_status(self.tmpdir.name, run=raising_run)
         self.assertIn("unknown", result["serviceActive"])
+
+    def test_includes_the_current_config_when_the_unit_exists(self):
+        unit_path = os.path.join(self.tmpdir.name, "transcriber.service")
+        with open(unit_path, "w", encoding="utf-8") as f:
+            f.write('ExecStart=/x/transcriber.py "/mnt/videos" --language en --watch 300\n')
+        run = unittest.mock.Mock(return_value=FakeCompletedProcess(stdout="active\n"))
+        result = plugin.get_status(self.tmpdir.name, run=run, unit_path=unit_path)
+        self.assertEqual(result["config"], {"inputDir": "/mnt/videos", "language": "en"})
+
+    def test_config_is_none_when_the_unit_does_not_exist(self):
+        run = unittest.mock.Mock(return_value=FakeCompletedProcess(stdout="inactive\n"))
+        result = plugin.get_status(self.tmpdir.name, run=run, unit_path=os.path.join(self.tmpdir.name, "nope.service"))
+        self.assertIsNone(result["config"])
 
 
 class ControlTests(unittest.TestCase):
@@ -170,6 +290,18 @@ class MainOutputEnvelopeTests(unittest.TestCase):
             with unittest.mock.patch("subprocess.run", return_value=FakeCompletedProcess(stdout="active\n")):
                 printed = self.run_main({"stateDir": tmp})
         self.assertIn("serviceActive", printed["output"])
+
+    def test_configure_mode_dispatches_to_configure(self):
+        with unittest.mock.patch("subprocess.run", return_value=FakeCompletedProcess(returncode=0)):
+            printed = self.run_main({"mode": "configure", "inputDir": "/mnt/videos", "language": "pt"})
+        self.assertIn("output", printed)
+        self.assertTrue(printed["output"]["ok"])
+
+    def test_configure_mode_rejects_a_bad_language_without_calling_sudo(self):
+        with unittest.mock.patch("subprocess.run") as run:
+            printed = self.run_main({"mode": "configure", "inputDir": "/mnt/videos", "language": "fr"})
+        self.assertIn("error", printed)
+        run.assert_not_called()
 
 
 if __name__ == "__main__":

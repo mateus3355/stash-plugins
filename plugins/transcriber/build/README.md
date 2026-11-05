@@ -4,10 +4,15 @@
 `../transcriber.yml`) is a compiled bundle, not hand-written. This
 directory is its source.
 
-Unlike Folder Browser/Subtitle Markers, nothing here imports real Stash
-components (`ui/v2.5/src`) - the dashboard is plain `react-bootstrap`
-primitives, so there's no `src/*` alias to configure and the bundle stays
-small (a few KB, vs. hundreds for the other two).
+Most of this is plain `react-bootstrap` primitives, same as before. The one
+exception is the folder/language picker, which uses Stash's own real
+`FolderSelect` (`src/components/Shared/FolderSelect/FolderSelect` - same
+component Scan/Clean task dialogs use, and the same one Subtitle Markers'
+own picker uses), so there is a `src/*` alias and `@apollo/client`/
+`react-intl` externals after all (FolderSelect's `useDirectory` is an Apollo
+query; it also calls `useIntl()`). The bundle is still much smaller than
+Folder Browser/Subtitle Markers since nothing else here pulls in Stash's
+generated GraphQL types/TagSelect/etc.
 
 `../plugin.py` (the server-side script Stash actually runs) is plain,
 hand-written Python - nothing here builds it.
