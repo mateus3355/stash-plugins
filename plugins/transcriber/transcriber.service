@@ -1,0 +1,21 @@
+[Unit]
+Description=Whisper GPU video transcriber
+After=network-online.target local-fs.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__USER__
+WorkingDirectory=__DIR__
+ExecStart=__DIR__/venv/bin/python __DIR__/transcriber.py "__INPUT__" --watch 300
+# Python output unbuffered so `journalctl -f` shows progress immediately
+Environment=PYTHONUNBUFFERED=1
+Restart=on-failure
+RestartSec=30
+# give the current segment time to finish on stop
+KillSignal=SIGTERM
+TimeoutStopSec=60
+Nice=5
+
+[Install]
+WantedBy=multi-user.target

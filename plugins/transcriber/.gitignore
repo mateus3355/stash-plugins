@@ -1,0 +1,6 @@
+# Runtime/environment data from running transcriber.py - machine-specific, not plugin
+# source. install_service.sh (re)creates venv/; transcriber.py writes everything else.
+venv/
+models/
+state/
+logs/

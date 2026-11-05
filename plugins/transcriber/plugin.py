@@ -1,0 +1,100 @@
+"""Stash-facing dashboard/control for the Whisper GPU transcriber service.
+
+This does NOT run the transcription itself - transcriber.py keeps doing that
+exactly as before, via its own systemd service (see README). This script
+only reads that service's state files and (for start/stop/restart) shells
+out to systemctl, so Stash's Settings/a plugin page can show live progress
+and control it without SSHing in.
+"""
+
+import json
+import os
+import subprocess
+import sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+SERVICE_NAME = "transcriber.service"
+
+# How many of the most recent failures to send back per status poll - failed.json can grow
+# to thousands of entries over a large library, and this is re-read every few seconds by the
+# dashboard, so the full list is never shipped over the wire, just a count plus a sample.
+RECENT_FAILED_LIMIT = 20
+
+
+def read_json(path, default):
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return default
+
+
+def summarize_failed(failed):
+    """failed.json is {path: {error, mtime, when}} - turn it into a total count plus the
+    most recent entries (by "when"), as a list, for compact display."""
+    entries = [
+        {"path": path, "error": info.get("error"), "when": info.get("when")}
+        for path, info in failed.items()
+        if isinstance(info, dict)
+    ]
+    entries.sort(key=lambda e: e.get("when") or "", reverse=True)
+    return {"count": len(entries), "recent": entries[:RECENT_FAILED_LIMIT]}
+
+
+def get_status(state_dir, run=None):
+    # Not a `run=subprocess.run` default - that would bind the real subprocess.run once, at
+    # import time, which a test patching subprocess.run afterwards could never actually
+    # reach. Looking it up here instead means a patch (or an explicit run=...) always wins.
+    run = run or subprocess.run
+    status = read_json(os.path.join(state_dir, "status.json"), None)
+    failed = read_json(os.path.join(state_dir, "failed.json"), {})
+    try:
+        result = run(["systemctl", "is-active", SERVICE_NAME], capture_output=True, text=True, timeout=10)
+        service_active = result.stdout.strip() or result.stderr.strip() or "unknown"
+    except Exception as e:  # noqa: BLE001 - genuinely want to report any failure, not crash
+        service_active = f"unknown: {e}"
+    return {"status": status, "failed": summarize_failed(failed), "serviceActive": service_active}
+
+
+def control(action, run=None):
+    run = run or subprocess.run
+    if action not in ("start", "stop", "restart"):
+        return {"error": f"unknown action: {action}"}
+    try:
+        # -n: fail immediately rather than hang waiting for a password that will never come -
+        # this runs non-interactively from Stash's plugin process. Requires a sudoers rule
+        # granting exactly this command, non-interactively - see README.
+        result = run(["sudo", "-n", "systemctl", action, SERVICE_NAME], capture_output=True, text=True, timeout=30)
+    except Exception as e:  # noqa: BLE001
+        return {"error": str(e)}
+    if result.returncode != 0:
+        message = (result.stderr or result.stdout or f"systemctl {action} failed").strip()
+        return {"error": message}
+    return {"ok": True}
+
+
+def main():
+    json_input = json.loads(sys.stdin.read())
+    args = json_input.get("args", {})
+    mode = args.get("mode", "status")
+    state_dir = args.get("stateDir") or os.path.join(HERE, "state")
+
+    if mode == "status":
+        result = get_status(state_dir)
+    elif mode in ("start", "stop", "restart"):
+        result = control(mode)
+    else:
+        result = {"error": f"unknown mode: {mode}"}
+
+    # Matches the JSON-RPC shape Stash expects from a plugin process (pkg/plugin/common/msg.go
+    # PluginOutput): "error" set on failure, or "output" holding the whole result on success -
+    # what runPluginOperation's GraphQL response is built from (see Subtitle Markers' own
+    # subtitleMarkers.py for the same convention and why it matters).
+    if "error" in result:
+        print(json.dumps({"error": result["error"]}))
+    else:
+        print(json.dumps({"output": result}))
+
+
+if __name__ == "__main__":
+    main()

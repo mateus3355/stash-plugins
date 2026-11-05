@@ -1,0 +1,16 @@
+name: Transcriber
+description: >-
+  Dashboard and remote control for the Whisper GPU video transcriber service
+  (transcriber.py / systemd) - live progress, recent failures, and
+  start/stop/restart.
+version: 1.0
+url: https://github.com/mateus3355/stash-plugins
+
+ui:
+  javascript:
+    - transcriber.js
+
+exec:
+  - python3
+  - "{pluginDir}/plugin.py"
+interface: raw
