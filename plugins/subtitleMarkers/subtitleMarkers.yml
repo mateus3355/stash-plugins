@@ -1,0 +1,16 @@
+name: Subtitle Markers
+description: >-
+  Searches .srt subtitle files under a folder (and its subfolders) for a
+  phrase, and creates a scene marker wherever it's found, using the chosen
+  tag and title.
+version: 1.0
+url: https://github.com/mateus3355/stash-plugins
+
+ui:
+  javascript:
+    - subtitleMarkers.js
+
+exec:
+  - python
+  - "{pluginDir}/subtitleMarkers.py"
+interface: raw
