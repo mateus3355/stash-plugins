@@ -219,15 +219,18 @@ def path_prefix_regex(prefix):
 
 
 def run(path, search, tag_id, title, stash):
+    """Searches, and creates a scene marker for every match (see module docstring-style
+    comments on the dedup/tag/title behaviour throughout). Returns {"error": "..."} for
+    invalid input, otherwise a dict of result counts."""
     if not path or not os.path.isdir(path):
         log.error(f"Path does not exist or is not a directory: {path!r}")
-        return {"output": "error", "error": "invalid path"}
+        return {"error": "invalid path"}
     if not search:
         log.error("No search text given.")
-        return {"output": "error", "error": "no search text"}
+        return {"error": "no search text"}
     if not tag_id:
         log.error("No tag given.")
-        return {"output": "error", "error": "no tag"}
+        return {"error": "no tag"}
 
     search_lower = search.lower()
     marker_title = title or search
@@ -310,7 +313,6 @@ def run(path, search, tag_id, title, stash):
         log.info(f"Queued marker preview generation for {len(created_marker_ids)} marker(s) (job {generate_job_id})")
 
     return {
-        "output": "ok",
         "created": created,
         "skipped": skipped_dup,
         "unmatchedSrt": unmatched_srt,
@@ -319,19 +321,119 @@ def run(path, search, tag_id, title, stash):
     }
 
 
+def search(path, search, stash):
+    """Searches without creating anything - every matching subtitle cue, with the scene it
+    belongs to and the cue's start time, for linking straight to Stash's own
+    `/scenes/<id>?t=<seconds>` (jumps to that point in the scene, no marker needed). Matches
+    within DEDUP_TOLERANCE_SECONDS of each other at the same scene collapse into one result,
+    the same reasoning as run()'s marker dedup: one spoken line split across cues shouldn't
+    become several near-identical results. Returns {"error": "..."} for invalid input,
+    otherwise a dict with a "results" list."""
+    if not path or not os.path.isdir(path):
+        log.error(f"Path does not exist or is not a directory: {path!r}")
+        return {"error": "invalid path"}
+    if not search:
+        log.error("No search text given.")
+        return {"error": "no search text"}
+
+    search_lower = search.lower()
+
+    srt_files = list(find_srt_files(path))
+    log.info(f"Found {len(srt_files)} .srt file(s) under {path}")
+
+    scene_cache = {}  # path prefix -> scene dict or None
+    recent_by_scene = {}  # scene id -> list of seconds already in results, for dedup
+    results = []
+    unmatched_srt = 0
+    matched_cues = 0
+
+    for i, srt_path in enumerate(srt_files):
+        log.progress(i / len(srt_files) if srt_files else 1)
+
+        try:
+            with open(srt_path, "r", encoding="utf-8-sig", errors="replace") as f:
+                content = f.read()
+        except OSError as e:
+            log.warning(f"Could not read {srt_path}: {e}")
+            continue
+
+        matches = [(start, text) for start, text in parse_srt(content) if search_lower in text.lower()]
+        if not matches:
+            continue
+        matched_cues += len(matches)
+
+        scene = None
+        for prefix in candidate_video_prefixes(srt_path):
+            if prefix in scene_cache:
+                scene = scene_cache[prefix]
+            else:
+                scene = stash.find_scene_by_path_prefix(path_prefix_regex(prefix))
+                scene_cache[prefix] = scene
+            if scene:
+                break
+
+        if scene is None:
+            log.warning(f"No matching scene found in Stash for subtitle: {srt_path}")
+            unmatched_srt += 1
+            continue
+
+        scene_id = scene["id"]
+        recent = recent_by_scene.setdefault(scene_id, [])
+
+        for start, text in matches:
+            if any(abs(start - s) <= DEDUP_TOLERANCE_SECONDS for s in recent):
+                continue
+            recent.append(start)
+            results.append(
+                {
+                    "sceneId": scene_id,
+                    "sceneTitle": scene.get("title") or "",
+                    "seconds": start,
+                    "text": text,
+                }
+            )
+
+    log.progress(1)
+    log.info(
+        f"Done. .srt files scanned: {len(srt_files)} | matching cues: {matched_cues} | "
+        f"results: {len(results)} | subtitles with no matching scene: {unmatched_srt}"
+    )
+
+    return {
+        "results": results,
+        "matchedCues": matched_cues,
+        "unmatchedSrt": unmatched_srt,
+    }
+
+
 def main():
     json_input = json.loads(sys.stdin.read())
     args = json_input.get("args", {})
     stash = StashInterface(json_input["server_connection"])
 
-    result = run(
-        path=args.get("path", ""),
-        search=args.get("search", ""),
-        tag_id=args.get("tagId", ""),
-        title=args.get("title", ""),
-        stash=stash,
-    )
-    print(json.dumps(result))
+    path = args.get("path", "")
+    search_text = args.get("search", "")
+    mode = args.get("mode", "mark")
+
+    if mode == "search":
+        result = search(path, search_text, stash)
+    else:
+        result = run(
+            path=path,
+            search=search_text,
+            tag_id=args.get("tagId", ""),
+            title=args.get("title", ""),
+            stash=stash,
+        )
+
+    # Matches the JSON-RPC shape Stash expects from a plugin process (pkg/plugin/common/msg.go
+    # PluginOutput): "error" set (and "output" absent/ignored) on failure, or "output" holding
+    # the whole result on success - this is what runPluginOperation's GraphQL response is
+    # built from, so the UI's search mode gets the "results" list back directly.
+    if "error" in result:
+        print(json.dumps({"error": result["error"]}))
+    else:
+        print(json.dumps({"output": result}))
 
 
 if __name__ == "__main__":

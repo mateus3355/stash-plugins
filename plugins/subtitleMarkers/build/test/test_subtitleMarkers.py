@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 import tempfile
@@ -12,6 +13,7 @@ from subtitleMarkers import (
     find_srt_files,
     _translate_gitignore_pattern,
     run,
+    search,
 )
 
 
@@ -437,18 +439,143 @@ class RunIntegrationTests(unittest.TestCase):
     def test_invalid_path_errors_without_touching_stash(self):
         stash = FakeStash({})
         result = run("/no/such/path", "hello", "tag-1", "t", stash)
-        self.assertEqual(result["output"], "error")
+        self.assertEqual(result["error"], "invalid path")
         self.assertEqual(stash.created_markers, [])
 
     def test_empty_search_errors(self):
         stash = FakeStash({})
         result = run(self.tmpdir.name, "", "tag-1", "t", stash)
-        self.assertEqual(result["output"], "error")
+        self.assertIn("error", result)
 
     def test_missing_tag_errors(self):
         stash = FakeStash({})
         result = run(self.tmpdir.name, "hello", "", "t", stash)
-        self.assertEqual(result["output"], "error")
+        self.assertIn("error", result)
+
+
+class SearchTests(unittest.TestCase):
+    """search() - find matches and link straight to the scene at that timestamp, without
+    creating any markers (no tag/title needed)."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmpdir.cleanup)
+
+    def write_srt(self, relpath, content):
+        full = os.path.join(self.tmpdir.name, relpath)
+        os.makedirs(os.path.dirname(full), exist_ok=True)
+        with open(full, "w", encoding="utf-8") as f:
+            f.write(content)
+        return full
+
+    def test_finds_a_match_without_creating_any_marker(self):
+        self.write_srt("movie.srt", "1\n00:00:12,000 --> 00:00:14,000\nSomeone said hello there\n")
+        video_path = os.path.join(self.tmpdir.name, "movie.mp4")
+        stash = FakeStash({video_path: "scene-1"})
+
+        result = search(self.tmpdir.name, "hello", stash)
+
+        self.assertEqual(
+            result["results"],
+            [{"sceneId": "scene-1", "sceneTitle": "Scene scene-1", "seconds": 12.0, "text": "Someone said hello there"}],
+        )
+        self.assertEqual(stash.created_markers, [])
+        self.assertEqual(getattr(stash, "generate_calls", []), [])
+
+    def test_collapses_near_duplicate_matches_in_the_same_scene(self):
+        self.write_srt(
+            "movie.srt",
+            "1\n00:00:10,000 --> 00:00:11,000\nhello\n\n"
+            "2\n00:00:11,500 --> 00:00:12,500\nhello again\n",
+        )
+        video_path = os.path.join(self.tmpdir.name, "movie.mp4")
+        stash = FakeStash({video_path: "scene-1"})
+
+        result = search(self.tmpdir.name, "hello", stash)
+
+        self.assertEqual(len(result["results"]), 1)
+        self.assertEqual(result["results"][0]["seconds"], 10.0)
+
+    def test_srt_with_no_matching_scene_is_reported_and_skipped(self):
+        self.write_srt("orphan.srt", "1\n00:00:01,000 --> 00:00:02,000\nhello\n")
+        stash = FakeStash({})
+
+        result = search(self.tmpdir.name, "hello", stash)
+
+        self.assertEqual(result["results"], [])
+        self.assertEqual(result["unmatchedSrt"], 1)
+
+    def test_invalid_path_errors(self):
+        stash = FakeStash({})
+        result = search("/no/such/path", "hello", stash)
+        self.assertEqual(result["error"], "invalid path")
+
+    def test_empty_search_errors(self):
+        stash = FakeStash({})
+        result = search(self.tmpdir.name, "", stash)
+        self.assertIn("error", result)
+
+
+class MainOutputEnvelopeTests(unittest.TestCase):
+    """main()'s stdout must match Stash's plugin JSON-RPC protocol (pkg/plugin/common/msg.go
+    PluginOutput): {"output": <whatever the mode's function returned>} on success, or
+    {"error": "..."} on failure - this is what runPluginOperation's GraphQL response is
+    built from, so getting the envelope wrong would silently break the UI's search results."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmpdir.cleanup)
+
+    def run_main(self, args, monkeypatch_stash):
+        import io
+        import contextlib
+        import unittest.mock
+        import subtitleMarkers
+
+        stdin = json.dumps({"server_connection": {}, "args": args})
+        real_stash_interface = subtitleMarkers.StashInterface
+        subtitleMarkers.StashInterface = lambda conn: monkeypatch_stash
+        out = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(out), unittest.mock.patch("sys.stdin", io.StringIO(stdin)):
+                subtitleMarkers.main()
+        finally:
+            subtitleMarkers.StashInterface = real_stash_interface
+        return json.loads(out.getvalue())
+
+    def test_search_mode_wraps_its_result_under_output(self):
+        path = self.tmpdir.name
+        full = os.path.join(path, "movie.srt")
+        with open(full, "w", encoding="utf-8") as f:
+            f.write("1\n00:00:01,000 --> 00:00:02,000\nhello\n")
+        video_path = os.path.join(path, "movie.mp4")
+        stash = FakeStash({video_path: "scene-1"})
+
+        printed = self.run_main({"mode": "search", "path": path, "search": "hello"}, stash)
+
+        self.assertEqual(printed["output"]["results"][0]["sceneId"], "scene-1")
+        self.assertNotIn("error", printed)
+
+    def test_invalid_input_is_an_error_key_with_no_output(self):
+        stash = FakeStash({})
+
+        printed = self.run_main({"mode": "search", "path": "/no/such/path", "search": "hello"}, stash)
+
+        self.assertEqual(printed, {"error": "invalid path"})
+
+    def test_mark_mode_is_still_the_default_when_mode_is_omitted(self):
+        full = os.path.join(self.tmpdir.name, "movie.srt")
+        with open(full, "w", encoding="utf-8") as f:
+            f.write("1\n00:00:01,000 --> 00:00:02,000\nhello\n")
+        video_path = os.path.join(self.tmpdir.name, "movie.mp4")
+        stash = FakeStash({video_path: "scene-1"})
+
+        printed = self.run_main(
+            {"path": self.tmpdir.name, "search": "hello", "tagId": "tag-1", "title": "t"}, stash
+        )
+
+        self.assertEqual(printed["output"]["created"], 1)
+        self.assertEqual(stash.created_markers[0][0], "scene-1")
 
 
 if __name__ == "__main__":

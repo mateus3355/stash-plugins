@@ -94,9 +94,9 @@ async function run() {
     cache: new Apollo.InMemoryCache(),
   });
 
-  // The plugin's own plain-fetch GraphQL calls (runPluginTask / findJob) - separate from
-  // the Apollo client above, which TagIDSelect and the Configuration query use instead.
-  // Simulates a job that reports RUNNING once, then FINISHED.
+  // The plugin's own plain-fetch GraphQL calls (runPluginTask / findJob / runPluginOperation) -
+  // separate from the Apollo client above, which TagIDSelect and the Configuration query use
+  // instead. Simulates a job that reports RUNNING once, then FINISHED.
   const graphqlCalls = [];
   let findJobCallCount = 0;
   window.fetch = function (url, opts) {
@@ -111,6 +111,16 @@ async function run() {
       data = findJobCallCount === 1
         ? { findJob: { status: 'RUNNING', progress: 0.5, error: null } }
         : { findJob: { status: 'FINISHED', progress: 1, error: null } };
+    } else if (name === 'SubtitleMarkersSearch') {
+      data = {
+        runPluginOperation: {
+          results: [
+            { sceneId: 'scene-1', sceneTitle: 'Ember Evening', seconds: 12.5, text: 'Someone said knock knock' },
+          ],
+          matchedCues: 1,
+          unmatchedSrt: 0,
+        },
+      };
     } else if (name === 'FindTagsForSelect' || name === 'FindTagsByIDForSelect') {
       // TagIDSelect's own search/by-id queries go through a separate Apollo client this
       // bundle's compiled copy of src/core/StashService creates for itself (an HttpLink
@@ -203,13 +213,14 @@ async function run() {
 
   const pathInput = container.querySelector('.subtitle-markers-folder input');
   const searchInput = Array.from(container.querySelectorAll('input[type="text"]')).find((i) => i.placeholder.includes('subtitle lines'));
-  const titleInput = Array.from(container.querySelectorAll('input[type="text"]')).find((i) => i.placeholder.includes('Marker title'));
-  console.log('E) path (real FolderSelect)/search/title inputs present:', !!pathInput && !!searchInput && !!titleInput);
-  console.log('F) real TagIDSelect (react-select) rendered:', !!container.querySelector('.tag-select, [class*="-control"]'));
+  console.log('E) path (real FolderSelect)/search inputs present:', !!pathInput && !!searchInput);
   console.log('F2) real FolderSelect shows the library path as a starting point:', container.textContent.includes('/lib'));
 
-  const runButton = Array.from(container.querySelectorAll('button')).find((b) => b.textContent.includes('Search & Create Markers'));
-  console.log('G) Run button starts disabled (no path/search/tag filled yet):', runButton.disabled === true);
+  // "Also create scene markers" is off by default - no tag/title fields, no marker-only UI.
+  console.log('F5) tag select is NOT shown by default (marker creation is opt-in):', !container.querySelector('.tag-select'));
+
+  let runButton = Array.from(container.querySelectorAll('button')).find((b) => b.textContent === 'Search' || b.textContent === 'Searching…');
+  console.log('G) Run button starts disabled (no path/search filled yet):', runButton.disabled === true);
 
   // Navigate the real folder browser: click the library path, then the subfolder under it -
   // the same clicking-through-tiles interaction a user gets, not typing a raw path by hand.
@@ -230,9 +241,43 @@ async function run() {
     TestUtils.Simulate.change(searchInput, { target: { value: 'knock knock' } });
   });
 
+  console.log('I) Run button enabled once path/search are filled, with no tag needed:', runButton.disabled === false);
+
+  // --- Default mode: search only, no marker created ---
+  await TestUtils.act(async () => {
+    TestUtils.Simulate.click(runButton);
+    await new Promise((r) => setTimeout(r, 20));
+  });
+
+  const searchCall = graphqlCalls.find((c) => c.name === 'SubtitleMarkersSearch');
+  console.log(
+    'P) clicking Search called runPluginOperation with mode "search" and the form\'s values:',
+    !!searchCall
+      && searchCall.variables.plugin_id === 'subtitleMarkers'
+      && searchCall.variables.args.mode === 'search'
+      && searchCall.variables.args.path === '/lib/A'
+      && searchCall.variables.args.search === 'knock knock'
+  );
+  console.log('Q) no marker-creation calls were made in search-only mode:', !graphqlCalls.some((c) => c.name === 'SubtitleMarkersRunTask'));
+
+  const resultLink = container.querySelector('.subtitle-markers-result a');
+  console.log('R) a result link is shown, pointing at the scene and timestamp:', !!resultLink && resultLink.getAttribute('href') === '/scenes/scene-1?t=12.5');
+  console.log('S) the result shows the scene title and matched subtitle text:', container.textContent.includes('Ember Evening') && container.textContent.includes('knock knock'));
+
+  // --- Turning on "Also create scene markers" reveals the tag/title fields and switches the
+  // button back to the existing background-job marker-creation flow ---
+  const createMarkersCheckbox = container.querySelector('#subtitle-markers-create-markers');
+  await TestUtils.act(async () => {
+    TestUtils.Simulate.change(createMarkersCheckbox, { target: { checked: true } });
+  });
+  console.log('T) checking "Also create scene markers" reveals the real TagIDSelect:', !!container.querySelector('.tag-select'));
+
+  runButton = Array.from(container.querySelectorAll('button')).find((b) => b.textContent.includes('Search & Create Markers'));
+  console.log('G2) Run button is disabled again until a tag is chosen:', runButton.disabled === true);
+
   // Pick the tag through the real react-select control, the same way a user would: type to
   // search (its options load async via loadOptions, debounced 100ms), then click the result.
-  const tagSelectInput = container.querySelector('.tag-select input, [class*="-control"] input');
+  const tagSelectInput = container.querySelector('.tag-select input');
   await TestUtils.act(async () => {
     TestUtils.Simulate.change(tagSelectInput, { target: { value: 'Knock' } });
     await new Promise((r) => setTimeout(r, 200));
@@ -245,7 +290,7 @@ async function run() {
   }
   console.log('H) tag picked from the real dropdown:', !!tagOption);
 
-  console.log('I) Run button enabled once path/search/tag are filled:', runButton.disabled === false);
+  console.log('I2) Run button enabled once path/search/tag are filled:', runButton.disabled === false);
 
   await TestUtils.act(async () => {
     TestUtils.Simulate.click(runButton);

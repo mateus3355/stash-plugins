@@ -3,6 +3,7 @@ import { ConfigurationProvider } from "src/hooks/Config";
 import { ToastProvider } from "src/hooks/Toast";
 import { TagIDSelect } from "src/components/Tags/TagSelect";
 import { FolderSelect } from "src/components/Shared/FolderSelect/FolderSelect";
+import TextUtils from "src/utils/text";
 
 import type ReactNS from "react";
 
@@ -43,6 +44,13 @@ interface Job {
   error: string | null;
 }
 
+interface SearchResult {
+  sceneId: string;
+  sceneTitle: string;
+  seconds: number;
+  text: string;
+}
+
 // ---------------------------------------------------------------------
 // GraphQL - plain fetch, same-origin so the browser's own session cookie
 // already authenticates it (same approach as the Folder Browser plugin).
@@ -80,6 +88,21 @@ function findJob(id: string): Promise<Job | null> {
   ).then((data) => data.findJob);
 }
 
+// Unlike runPluginTask (a background job, polled via findJob), runPluginOperation runs the
+// plugin process immediately and waits for it, returning whatever it printed as its
+// "output" directly - no job to poll, but the whole search has to finish before this
+// resolves. Used for the no-marker "just find it and link to it" mode, which doesn't need
+// a job's progress tracking the way the (slower, writes-to-the-database) marker-creation
+// mode does.
+function runPluginOperation(args: Record<string, string>): Promise<any> {
+  return gql(
+    `mutation SubtitleMarkersSearch($plugin_id: ID!, $args: Map) {
+      runPluginOperation(plugin_id: $plugin_id, args: $args)
+    }`,
+    { plugin_id: PLUGIN_ID, args }
+  ).then((data) => data.runPluginOperation);
+}
+
 // ---------------------------------------------------------------------
 // Page component
 // ---------------------------------------------------------------------
@@ -98,14 +121,19 @@ const STATUS_LABEL: Record<JobStatus, string> = {
 function SubtitleMarkersPage({ libraryPaths }: { libraryPaths: string[] }) {
   const [path, setPath] = useState("");
   const [search, setSearch] = useState("");
+  const [createMarkers, setCreateMarkers] = useState(false);
   const [tagId, setTagId] = useState("");
   const [title, setTitle] = useState("");
   const [starting, setStarting] = useState(false);
   const [jobId, setJobId] = useState<string | null>(null);
   const [job, setJob] = useState<Job | null>(null);
+  const [searching, setSearching] = useState(false);
+  const [results, setResults] = useState<SearchResult[] | null>(null);
+  const [searchError, setSearchError] = useState<string | null>(null);
 
   const jobRunning = starting || (job !== null && RUNNING_STATUSES.includes(job.status));
-  const canRun = !!path.trim() && !!search.trim() && !!tagId && !jobRunning;
+  const busy = jobRunning || searching;
+  const canRun = !!path.trim() && !!search.trim() && (!createMarkers || !!tagId) && !busy;
 
   // Poll the job until it stops running. A fresh effect per jobId, so starting a new run
   // (a new jobId) cleanly replaces whatever polling the previous one was doing.
@@ -154,6 +182,29 @@ function SubtitleMarkersPage({ libraryPaths }: { libraryPaths: string[] }) {
       });
   }
 
+  function handleSearch() {
+    setSearching(true);
+    setSearchError(null);
+    setResults(null);
+    runPluginOperation({ mode: "search", path: path.trim(), search: search.trim() })
+      .then((output: { results: SearchResult[] }) => {
+        setSearching(false);
+        setResults(output.results);
+      })
+      .catch((e: any) => {
+        setSearching(false);
+        setSearchError(String(e && e.message ? e.message : e));
+      });
+  }
+
+  function handleRunClick() {
+    if (createMarkers) {
+      handleRun();
+    } else {
+      handleSearch();
+    }
+  }
+
   function renderStatus() {
     if (!job) return null;
     const percent = Math.round((job.progress || 0) * 100);
@@ -172,14 +223,47 @@ function SubtitleMarkersPage({ libraryPaths }: { libraryPaths: string[] }) {
     );
   }
 
+  function renderResults() {
+    if (searching) {
+      return (
+        <div className="subtitle-markers-results mt-3 text-muted">
+          <Spinner animation="border" size="sm" className="mr-2" />
+          Searching…
+        </div>
+      );
+    }
+    if (searchError) return <Alert variant="danger" className="mt-3">{searchError}</Alert>;
+    if (results === null) return null;
+    if (results.length === 0) {
+      return <p className="subtitle-markers-results mt-3 text-muted">No matches found.</p>;
+    }
+    return (
+      <div className="subtitle-markers-results mt-3">
+        <p className="text-muted">
+          {results.length} match{results.length === 1 ? "" : "es"}:
+        </p>
+        <ul className="list-unstyled">
+          {results.map((r, i) => (
+            <li key={i} className="subtitle-markers-result">
+              <a href={`/scenes/${r.sceneId}?t=${r.seconds}`} target="_blank" rel="noreferrer">
+                {r.sceneTitle || `Scene ${r.sceneId}`} @ {TextUtils.secondsToTimestamp(r.seconds)}
+              </a>
+              <div className="text-muted subtitle-markers-result-text">{r.text}</div>
+            </li>
+          ))}
+        </ul>
+      </div>
+    );
+  }
+
   return (
     <div className="subtitle-markers-page container-fluid">
       <h3>Subtitle Markers</h3>
       <p className="text-muted">
-        Searches every .srt file under a folder (and its subfolders) for a phrase, and creates a
-        scene marker wherever it's found - matched to the video file next to each subtitle, the
-        same way Stash itself associates captions. Marker preview generation is queued
-        automatically afterwards for anything created.
+        Searches every .srt file under a folder (and its subfolders) for a phrase - matched to
+        the video file next to each subtitle, the same way Stash itself associates captions.
+        Either jump straight to each match's timestamp, or (optionally) create a scene marker for
+        each one, with preview generation queued automatically afterwards.
       </p>
 
       <Form.Group className="subtitle-markers-folder">
@@ -199,37 +283,56 @@ function SubtitleMarkersPage({ libraryPaths }: { libraryPaths: string[] }) {
           value={search}
           placeholder="Text to find in subtitle lines"
           onChange={(e: any) => setSearch(e.target.value)}
-          disabled={jobRunning}
+          disabled={busy}
         />
         <Form.Text className="text-muted">Case-insensitive, matched as plain text.</Form.Text>
       </Form.Group>
 
       <Form.Group>
-        <Form.Label>Tag</Form.Label>
-        <TagIDSelect
-          ids={tagId ? [tagId] : []}
-          isDisabled={jobRunning}
-          onSelect={(items: { id: string }[]) => setTagId(items[0]?.id || "")}
+        <Form.Check
+          type="checkbox"
+          id="subtitle-markers-create-markers"
+          label="Also create scene markers"
+          checked={createMarkers}
+          disabled={busy}
+          onChange={(e: any) => setCreateMarkers(e.target.checked)}
         />
+        <Form.Text className="text-muted">
+          Off by default: just search, and link to each match's timestamp. Turn this on to also
+          create a scene marker for each match, using the tag and title below.
+        </Form.Text>
       </Form.Group>
 
-      <Form.Group>
-        <Form.Label>Marker title</Form.Label>
-        <Form.Control
-          type="text"
-          value={title}
-          placeholder={search || "Marker title"}
-          onChange={(e: any) => setTitle(e.target.value)}
-          disabled={jobRunning}
-        />
-        <Form.Text className="text-muted">Defaults to the search text if left blank.</Form.Text>
-      </Form.Group>
+      {createMarkers && (
+        <>
+          <Form.Group>
+            <Form.Label>Tag</Form.Label>
+            <TagIDSelect
+              ids={tagId ? [tagId] : []}
+              isDisabled={busy}
+              onSelect={(items: { id: string }[]) => setTagId(items[0]?.id || "")}
+            />
+          </Form.Group>
 
-      <Button onClick={handleRun} disabled={!canRun}>
-        {jobRunning ? "Running…" : "Search & Create Markers"}
+          <Form.Group>
+            <Form.Label>Marker title</Form.Label>
+            <Form.Control
+              type="text"
+              value={title}
+              placeholder={search || "Marker title"}
+              onChange={(e: any) => setTitle(e.target.value)}
+              disabled={busy}
+            />
+            <Form.Text className="text-muted">Defaults to the search text if left blank.</Form.Text>
+          </Form.Group>
+        </>
+      )}
+
+      <Button onClick={handleRunClick} disabled={!canRun}>
+        {jobRunning ? "Running…" : searching ? "Searching…" : createMarkers ? "Search & Create Markers" : "Search"}
       </Button>
 
-      {renderStatus()}
+      {createMarkers ? renderStatus() : renderResults()}
     </div>
   );
 }
