@@ -102,6 +102,19 @@ function getLibraryPaths(): Promise<string[]> {
   });
 }
 
+function findScenePath(id: string): Promise<string | undefined> {
+  return gql("query FolderBrowserFindScenePath($id: ID!) { findScene(id: $id) { id files { path } } }", { id }).then(
+    (data) => data?.findScene?.files?.[0]?.path
+  );
+}
+
+function findImagePath(id: string): Promise<string | undefined> {
+  return gql(
+    "query FolderBrowserFindImagePath($id: ID!) { findImage(id: $id) { id visual_files { path } } }",
+    { id }
+  ).then((data) => data?.findImage?.visual_files?.[0]?.path);
+}
+
 // ---------------------------------------------------------------------
 // Path helpers
 // ---------------------------------------------------------------------
@@ -122,6 +135,13 @@ function escapeRegExp(s: string) {
 // time or filtering client-side.
 function exactFolderRegex(folderPath: string) {
   return "^" + escapeRegExp(folderPath) + "[/\\\\][^/\\\\]+$";
+}
+
+// The directory containing a file path, e.g. "/lib/A/one.mp4" -> "/lib/A" - handles both
+// separators since a scene/image's stored path reflects whatever OS scanned it in.
+function dirname(path: string) {
+  const match = path.match(/^(.*)[/\\][^/\\]+$/);
+  return match ? match[1] : "";
 }
 
 // ---------------------------------------------------------------------
@@ -849,3 +869,84 @@ PluginApi.patch.before("MainNavBar.MenuItems", (props: any) => {
     return [props];
   }
 });
+
+// ---------------------------------------------------------------------
+// "Open containing folder" button on the scene/image player page
+// ---------------------------------------------------------------------
+//
+// .scene-toolbar-group / .image-toolbar-group (the row with the rating,
+// o-counter, organized toggle and "..." menu) aren't PatchComponent'd
+// individually - only the whole ScenePage/ImagePage is, and rebuilding its
+// entire render tree just to slot one button in is far too fragile. So,
+// same technique as Stash TV's QueueTvButton (see its AGENTS.md): watch the
+// DOM for the landmark element and inject into it directly, outside
+// React's own tree. That also sidesteps needing a Router for navigation -
+// a real <a href> works without one, and supports modifier-click/right-click
+// "open in new tab" for free, which a JS-driven click handler wouldn't.
+const PARENT_FOLDER_LINK_CLASS = "folder-browser-open-parent-folder";
+
+function currentSceneOrImageId(): { kind: "scenes" | "images"; id: string } | null {
+  // Stash's own IDs are plain integers, but matched generically here rather than assuming
+  // that - it's just a route pattern, not data validation.
+  const m = window.location.pathname.match(/^\/(scenes|images)\/([^/?]+)/);
+  return m ? { kind: m[1] as "scenes" | "images", id: m[2] } : null;
+}
+
+function ensureParentFolderButton() {
+  try {
+    const current = currentSceneOrImageId();
+    const container = current
+      ? document.querySelector(`.${current.kind === "scenes" ? "scene" : "image"}-toolbar-group:last-child`)
+      : null;
+
+    // Not on a scene/image page (or its toolbar hasn't rendered yet) - remove any button
+    // left over from a previous page so navigating away doesn't leave a stale link behind.
+    if (!current || !container) {
+      document.querySelectorAll(`.${PARENT_FOLDER_LINK_CLASS}`).forEach((el) => el.remove());
+      return;
+    }
+
+    let link = container.querySelector<HTMLAnchorElement>(`a.${PARENT_FOLDER_LINK_CLASS}`);
+    if (!link) {
+      link = document.createElement("a");
+      // Matches the other toolbar buttons (OCounterButton etc.): react-bootstrap's <Button
+      // className="minimal"> with no explicit variant renders "btn btn-primary minimal" -
+      // "minimal" is what actually strips the Bootstrap coloring down to an icon button.
+      link.className = `${PARENT_FOLDER_LINK_CLASS} btn btn-primary minimal`;
+      link.title = "Open containing folder in Folder Browser";
+      const wrapper = document.createElement("span");
+      wrapper.appendChild(link);
+      container.appendChild(wrapper);
+      PluginApi.ReactDOM.render(<FontAwesomeIcon icon={FA.faFolderOpen} className="fa-icon" />, link);
+    }
+
+    // The container can persist across navigating between scenes/images (the route just
+    // swaps the id param, same DOM node) - only re-resolve the link when the id actually
+    // changes, not on every unrelated DOM mutation the observer below sees.
+    const key = current.kind + ":" + current.id;
+    if (link.dataset.folderBrowserFor === key) return;
+    link.dataset.folderBrowserFor = key;
+    link.removeAttribute("href");
+
+    const lookup = current.kind === "scenes" ? findScenePath(current.id) : findImagePath(current.id);
+    lookup
+      .then((filePath) => {
+        // Navigated to a different scene/image (or away entirely) before this resolved -
+        // leave it alone, a newer call already owns this link (or it's been removed).
+        if (!link || link.dataset.folderBrowserFor !== key) return;
+        const folder = filePath && dirname(filePath);
+        if (folder) link.href = folderUrl(folder);
+      })
+      .catch((e: any) => {
+        console.error("[FolderBrowser] Failed to resolve the containing folder:", e);
+      });
+  } catch (e) {
+    console.error("[FolderBrowser] Failed to add the \"open containing folder\" button:", e);
+  }
+}
+
+new MutationObserver(ensureParentFolderButton).observe(document.body, { childList: true, subtree: true });
+// Covers the page already being on a scene/image when this script first runs (e.g. a
+// direct/refreshed load of a scene URL) - the observer alone only sees mutations *after*
+// it starts, not whatever's already rendered.
+ensureParentFolderButton();

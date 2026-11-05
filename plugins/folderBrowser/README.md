@@ -51,6 +51,12 @@ use the same mutations the native bulk-selection toolbar uses.
   navigation across the current page's images), rather than a detail page -
   there's no image detail page here to link to, and the lightbox is more
   useful as the default anyway.
+- **On a scene's or image's own player page** (not this plugin's page - the
+  native `/scenes/<id>` / `/images/<id>` page), an "open containing folder"
+  button is added next to the rating/o-counter/"..." row, opening this
+  plugin at that file's parent folder. See "The scene/image player button
+  isn't a `PatchComponent`" below for how, since - unlike the cards above -
+  there's no clean patch point for it.
 
 ## Why it needed more than a simple path filter
 
@@ -190,6 +196,51 @@ A couple of consequences worth knowing:
   one more child to `props.children`, the same technique
   `PluginApi.register.route()` itself uses internally to add a `<Route>` to
   `PluginRoutes`.
+
+## The scene/image player button isn't a `PatchComponent`
+
+The rating/o-counter/organized/"..." row on a scene or image's own player
+page (`.scene-toolbar-group` / `.image-toolbar-group` in
+`SceneDetails/Scene.tsx` / `ImageDetails/Image.tsx`) isn't individually
+patchable - only the whole `ScenePage`/`ImagePage` is, and rebuilding either
+page's entire render tree just to slot one button into a specific child
+spot is far too fragile to be worth it (the exact opposite of this plugin's
+whole approach elsewhere of reusing real components precisely so it
+*doesn't* have to reimplement anything).
+
+Same technique as Stash TV's `QueueTvButton` (a different plugin, same
+problem - see its own `docs/channels.md` § "Opening Stash's queue"):
+a `MutationObserver` watches the whole page for that toolbar's last
+`.scene-toolbar-group`/`.image-toolbar-group` to appear, and inserts a real
+`<a href>` into it directly - outside React's own tree entirely, driven by
+the URL (`/scenes/<id>` or `/images/<id>`) rather than component props.
+Consequences worth knowing:
+
+- **No `<Link>`, no Router context.** An element inserted this way isn't a
+  descendant of the app's `<BrowserRouter>` in React's sense (only in the
+  DOM), so `react-router-dom`'s `<Link>` wouldn't have the context it needs.
+  A plain `<a href="/folder-browser?path=...">` works without one, and
+  clicking it is a full page navigation rather than an instant client-side
+  route change - a deliberate, acceptable trade for not needing to fake a
+  second Router. It also means modifier-click / right-click "open in new
+  tab" work for free, the way they wouldn't with a JS `onClick` handler.
+- **Scene/image data is looked up directly** (`findScene(id) { files { path
+  } }` / `findImage(id) { visual_files { path } }`), not read from props -
+  there are no props here to read, since this isn't mounted as part of any
+  component's render.
+- **The toolbar's DOM node can persist across navigating between
+  scenes/images** - `ScenePage`/`ImagePage` only swap the id route param, so
+  React may reuse the same elements rather than remounting them. The
+  injected link is only re-resolved when the id actually changes (tracked
+  via a `data-folder-browser-for` attribute), not on every unrelated
+  mutation the observer sees, and is removed entirely on navigating away
+  from a scene/image page rather than left pointing at a stale folder.
+- Only the icon inside the link (`<FontAwesomeIcon icon={faFolderOpen} />`)
+  is rendered with `ReactDOM.render` - the `<a>` itself, its classes
+  (`btn btn-primary minimal`, matching the other toolbar buttons'
+  undecorated-`<Button className="minimal">` output), and its `href` are
+  plain DOM, since the icon alone needs React/JSX but not any context the
+  surrounding tree would normally provide.
 
 ## Notes / current limitations
 

@@ -141,6 +141,9 @@ async function run() {
     cache: new Apollo.InMemoryCache(),
   });
 
+  const scenesById = Object.fromEntries(scenesByPath.map((s) => [s.id, s]));
+  const imagesById = Object.fromEntries(imagesByPath.map((i) => [i.id, i]));
+
   window.fetch = function (url, opts) {
     const body = JSON.parse(opts.body);
     const q = body.query;
@@ -149,6 +152,29 @@ async function run() {
     }
     if (q.indexOf('FolderBrowserLibraryPaths') !== -1) {
       return Promise.resolve({ json: () => Promise.resolve({ data: { configuration: { general: { stashes: [{ path: '/lib' }] } } } }) });
+    }
+    if (q.indexOf('FolderBrowserFindScenePath(') !== -1) {
+      const scene = scenesById[body.variables.id];
+      return Promise.resolve({ json: () => Promise.resolve({ data: { findScene: scene ? { id: scene.id, files: scene.files } : null } }) });
+    }
+    if (q.indexOf('FolderBrowserFindImagePath(') !== -1) {
+      const image = imagesById[body.variables.id];
+      return Promise.resolve({ json: () => Promise.resolve({ data: { findImage: image ? { id: image.id, visual_files: image.visual_files } : null } }) });
+    }
+    if (q.indexOf('FindTagsForSelect') !== -1 || q.indexOf('FindTagsByIDForSelect') !== -1) {
+      // TagIDSelect's own search/by-id queries go through a separate Apollo client this
+      // bundle's compiled copy of src/core/StashService creates for itself (a real HttpLink
+      // backed by window.fetch, parsing a real Response - not just .json()) - not the
+      // in-memory apolloLink above. Previously unhandled here; harmless only because the
+      // test exited before this query's debounced initial load had time to settle - this
+      // plugin's own newer "open parent folder" test steps run longer and gave it that time,
+      // turning a silent dangling promise into a real unhandled-rejection crash.
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({ data: { findTags: { __typename: 'FindTagsResultType', count: 0, tags: [] } } }),
+          { status: 200, headers: { 'content-type': 'application/json' } }
+        )
+      );
     }
     return Promise.reject(new Error('unhandled fetch: ' + q));
   };
@@ -408,6 +434,64 @@ async function run() {
   });
   const bulkUpdateCall = apolloCalls.find((c) => c.name === 'BulkSceneUpdate');
   console.log('W) real bulkSceneUpdate mutation called with rating100=75, organized=true:', !!bulkUpdateCall, JSON.stringify(bulkUpdateCall && bulkUpdateCall.variables));
+
+  // --- "Open containing folder" button on the scene/image player page ---
+  // This button lives outside the FolderBrowser page's own React tree entirely (injected
+  // via MutationObserver into the native ScenePage/ImagePage toolbar, which isn't
+  // separately patchable) - simulate that toolbar's DOM directly, the way Stash's own
+  // ScenePage/ImagePage render it (see ui/v2.5 Scene.tsx/Image.tsx .scene-toolbar /
+  // .image-toolbar-group), rather than going through this plugin's own page at all.
+  function makeToolbar(kind) {
+    const el = document.createElement('div');
+    el.className = `${kind}-toolbar`;
+    el.innerHTML = `<span class="${kind}-toolbar-group">rating</span><span class="${kind}-toolbar-group">counters</span>`;
+    document.body.appendChild(el);
+    return el;
+  }
+  // A trivial, unrelated DOM mutation - stands in for whatever real re-rendering a client-side
+  // route change causes in the actual app, which is what wakes the MutationObserver up to
+  // re-check the current URL (changing window.location alone doesn't mutate the DOM).
+  function nudgeObserver() {
+    const span = document.createElement('span');
+    document.body.appendChild(span);
+    span.remove();
+  }
+
+  window.history.pushState(null, '', '/scenes/s1');
+  const sceneToolbar = makeToolbar('scene');
+  await new Promise((r) => setTimeout(r, 20));
+
+  let folderLink = sceneToolbar.querySelector('.scene-toolbar-group:last-child a.folder-browser-open-parent-folder');
+  console.log('X) "open containing folder" link added to the real scene toolbar\'s last group:', !!folderLink);
+  await new Promise((r) => setTimeout(r, 20));
+  console.log('Y) it resolves to the scene\'s actual containing folder:', folderLink && folderLink.getAttribute('href') === '/folder-browser?path=%2Flib%2FA');
+  console.log('Z) it renders the real folder icon (not a raw image/placeholder):', !!folderLink.querySelector('svg'));
+
+  // Navigating to a different scene while the toolbar's own DOM node persists (same as a
+  // real client-side route change within ScenePage) re-resolves for the new scene.
+  window.history.pushState(null, '', '/scenes/s2');
+  nudgeObserver();
+  await new Promise((r) => setTimeout(r, 20));
+  console.log('AA) navigating to a different scene re-resolves the link (not left stale):', folderLink.dataset.folderBrowserFor === 'scenes:s2');
+
+  // Navigating away removes the button rather than leaving a stale link pointing at the
+  // last scene visited.
+  window.history.pushState(null, '', '/scenes');
+  nudgeObserver();
+  await new Promise((r) => setTimeout(r, 20));
+  console.log('AB) navigating away from the scene removes the button:', !document.querySelector('a.folder-browser-open-parent-folder'));
+  sceneToolbar.remove();
+
+  // Same feature on the image player page.
+  window.history.pushState(null, '', '/images/i1');
+  const imageToolbar = makeToolbar('image');
+  await new Promise((r) => setTimeout(r, 40));
+  const imageFolderLink = imageToolbar.querySelector('.image-toolbar-group:last-child a.folder-browser-open-parent-folder');
+  console.log(
+    'AC) the same button works on the real image toolbar, resolving to the image\'s folder:',
+    !!imageFolderLink && imageFolderLink.getAttribute('href') === '/folder-browser?path=%2Flib%2FA'
+  );
+  imageToolbar.remove();
 }
 
 run().then(() => process.exit(0)).catch((e) => { console.error('FATAL', e); process.exit(1); });
