@@ -377,7 +377,12 @@ PluginApi.patch.before("MainNavBar.MenuItems", (props: any) => {
         </NavLink>
       </Nav.Link>
     );
-    return [{ ...props, children: [...(props.children || []), navLink] }];
+    // props.children isn't reliably an array - another plugin's own before() may have
+    // already wrapped it in a single <>...</> fragment, which [...x] can't spread (throws
+    // "x is not iterable", silently dropping this link since the catch below swallows it).
+    // Children.toArray() flattens whatever shape it's in (array, single element, nested
+    // fragment) into a real array, so this works regardless of plugin load order.
+    return [{ ...props, children: [...React.Children.toArray(props.children), navLink] }];
   } catch (e) {
     console.error("[SubtitleMarkers] Failed to patch nav bar:", e);
     return [props];

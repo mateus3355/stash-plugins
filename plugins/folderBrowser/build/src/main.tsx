@@ -853,15 +853,14 @@ PluginApi.patch.before("MainNavBar.MenuItems", (props: any) => {
       </Nav.Link>
     );
 
+    // Returning children as an array (not a <>...</> fragment) matters: another plugin's
+    // own before() may run after this one and do [...props.children], which throws on a
+    // single fragment element ("x is not iterable") rather than an array - Children.toArray
+    // also means this plugin itself tolerates whatever shape children arrives in.
     return [
       {
         ...props,
-        children: (
-          <>
-            {props.children}
-            {navLink}
-          </>
-        ),
+        children: [...React.Children.toArray(props.children), navLink],
       },
     ];
   } catch (e) {
