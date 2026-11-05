@@ -3,6 +3,7 @@ import { ConfigurationProvider } from "src/hooks/Config";
 import { ToastProvider } from "src/hooks/Toast";
 import { TagIDSelect } from "src/components/Tags/TagSelect";
 import { FolderSelect } from "src/components/Shared/FolderSelect/FolderSelect";
+import { queryFindSceneMarkers } from "src/core/StashService";
 import TextUtils from "src/utils/text";
 
 import type ReactNS from "react";
@@ -466,10 +467,20 @@ function queueSceneLink(item: SearchResult) {
   return `/scenes/${item.sceneId}?t=${item.seconds}&continue=true&autoplay=true`;
 }
 
+function startQueue(items: SearchResult[]) {
+  if (!items || items.length === 0) return;
+  saveQueue({ items, index: 0 });
+  // Opens in a new tab (not window.location.assign) so the page that started the queue -
+  // the search results, or the filtered markers list - stays open. A new tab opened this
+  // way (no noopener/noreferrer, same origin) inherits a cloned copy of sessionStorage at
+  // the moment it opens, which is how its own copy of this script finds the queue just
+  // saved above. Every advance *after* that first jump still happens within that one new
+  // tab (goToQueueIndex below), not a fresh tab per hit.
+  window.open(queueSceneLink(items[0]), "_blank");
+}
+
 function handlePlayAllInQueue(results: SearchResult[]) {
-  if (!results || results.length === 0) return;
-  saveQueue({ items: results, index: 0 });
-  window.location.assign(queueSceneLink(results[0]));
+  startQueue(results);
 }
 
 let queueAdvanceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -664,3 +675,61 @@ new MutationObserver(ensureQueueWidget).observe(document.body, { childList: true
 // exactly how this plugin advances between different scenes (a real navigation, not an SPA
 // route change), so this is reached on every cross-scene queue advance, not just a fresh load.
 ensureQueueWidget();
+
+// ---------------------------------------------------------------------
+// "Play All (Filtered)" - the same queue, started from Stash's own native Markers list (and
+// a Tag's "Markers" tab, which reuses the same component) instead of a search result list.
+// Plays through every marker matching whatever's currently filtered, not just the current
+// page - FilteredSceneMarkerList ("the real PatchComponent for this, unlike the scene player
+// page above) takes an extraOperations prop that becomes an entry in its "..." dropdown
+// (alongside "Play Random" etc.) - before() here adds one more to whatever a page already
+// passed in.
+// ---------------------------------------------------------------------
+
+// A generous cap, not a real limit on how many markers can match a filter - queueing
+// everything beyond this would make for an unreasonably large sessionStorage payload and an
+// hours-long queue; this is already far more than "Play Random"'s own per-page query size.
+const MAX_QUEUE_MARKERS = 1000;
+
+async function playAllFilteredMarkers(result: any, filter: any, filterHook?: (f: any) => any) {
+  try {
+    const effectiveFilter = filterHook ? filterHook(filter.clone()) : filter;
+    const filterCopy = effectiveFilter.clone();
+    filterCopy.currentPage = 1;
+    filterCopy.itemsPerPage = MAX_QUEUE_MARKERS;
+    const queryResult = await queryFindSceneMarkers(filterCopy);
+    const markers = queryResult.data?.findSceneMarkers?.scene_markers ?? [];
+    const items: SearchResult[] = markers.map((m: any) => ({
+      sceneId: m.scene.id,
+      sceneTitle: m.scene.title || `Scene ${m.scene.id}`,
+      seconds: m.seconds,
+      text: m.title || m.primary_tag?.name || "",
+    }));
+    startQueue(items);
+  } catch (e) {
+    console.error("[SubtitleMarkers] Failed to start the filtered-markers queue:", e);
+  }
+}
+
+PluginApi.patch.before("FilteredSceneMarkerList", (props: any) => {
+  try {
+    // Captured here, not read from the (result, filter, selectedIds) arguments
+    // extraOperations' onClick is actually called with below - those come from this
+    // component's *raw* `filter` state, not effectiveFilter (filterHook already applied) -
+    // see this component's own convertedExtraOperations mapping. A page that passes its own
+    // filterHook (the Tag markers tab does, to constrain to that tag) would otherwise have
+    // it silently ignored here, querying every marker instead of just that tag's.
+    // Re-applying it ourselves, the same way this component's own effectiveFilter does,
+    // fixes that.
+    const filterHook = props.filterHook;
+    const playAllFilteredOperation = {
+      text: "Play All (Filtered)",
+      onClick: (result: any, filter: any) => playAllFilteredMarkers(result, filter, filterHook),
+      isDisplayed: (result: any) => (result?.data?.findSceneMarkers?.count ?? 0) > 0,
+    };
+    return [{ ...props, extraOperations: [...(props.extraOperations || []), playAllFilteredOperation] }];
+  } catch (e) {
+    console.error("[SubtitleMarkers] Failed to add the \"Play All (Filtered)\" operation:", e);
+    return [props];
+  }
+});

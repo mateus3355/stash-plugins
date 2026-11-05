@@ -70,18 +70,25 @@ without watching the whole thing or editing scenes by hand one at a time.
   plugin task. **Search-only mode runs immediately instead** (no job, no
   polling) and shows its results as soon as the search finishes, since
   there's nothing to write and no need to track progress separately.
-- **"Play All in Queue"** plays through every search result in order, right
-  from the scene player - each hit gets a ~20s preview before auto-advancing
-  to the next one (seeking in place if the next hit is in the same scene,
-  navigating if it's a different one), with Prev/Next/Stop controls in a
-  small overlay. The 20s countdown only runs while the video is actually
-  playing - pausing to read or think suspends it, and resuming starts a
-  fresh one, rather than silently auto-advancing (and un-pausing) a video
-  you deliberately paused. This isn't Stash's own scene queue/"continue playlist"
-  feature (that only ever restarts each next scene from 0 - it has no
-  concept of a per-item start time) - the plugin tracks queue position
-  itself instead, the same way its "open containing folder" counterpart in
-  Folder Browser injects into the player page outside any `PatchComponent`.
+- **"Play All in Queue"** plays through every search result in order, in a
+  new tab (so the search page itself stays put) - each hit gets a ~20s
+  preview before auto-advancing to the next one (seeking in place if the
+  next hit is in the same scene, navigating if it's a different one), with
+  Prev/Next/Stop controls in a small overlay. The 20s countdown only runs
+  while the video is actually playing - pausing to read or think suspends
+  it, and resuming starts a fresh one, rather than silently auto-advancing
+  (and un-pausing) a video you deliberately paused. This isn't Stash's own
+  scene queue/"continue playlist" feature (that only ever restarts each next
+  scene from 0 - it has no concept of a per-item start time) - the plugin
+  tracks queue position itself instead, the same way its "open containing
+  folder" counterpart in Folder Browser injects into the player page outside
+  any `PatchComponent`.
+- **"Play All (Filtered)"** is the same queue, started from Stash's own
+  native Markers list (and a Tag's "Markers" tab) instead of a search result
+  list - it's a real `extraOperations` entry in that page's own "..."
+  dropdown (`FilteredSceneMarkerList`, alongside "Play Random" etc.), not an
+  injected one, so it plays through every marker matching whatever filter is
+  currently applied there (not just the current page, up to 1000 markers).
 
 ## Two parts
 

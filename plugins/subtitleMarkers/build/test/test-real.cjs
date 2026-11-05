@@ -125,6 +125,29 @@ async function run() {
           unmatchedSrt: 0,
         },
       };
+    } else if (name === 'FindSceneMarkers') {
+      // "Play All (Filtered)"'s own query, through the same internal StashService client as
+      // FindTagsForSelect below - mirrors a filter matching 2 markers across 2 scenes.
+      data = {
+        findSceneMarkers: {
+          __typename: 'FindSceneMarkersResultType',
+          count: 2,
+          scene_markers: [
+            {
+              __typename: 'SceneMarker', id: 'marker-1', title: '', seconds: 30, end_seconds: null, stream: '', preview: '', screenshot: '',
+              scene: { __typename: 'Scene', id: 'scene-1', title: 'Ember Evening', files: [], performers: [] },
+              primary_tag: { __typename: 'Tag', id: 'tag-1', name: 'Knock Knock' },
+              tags: [],
+            },
+            {
+              __typename: 'SceneMarker', id: 'marker-2', title: 'Custom title', seconds: 90, end_seconds: null, stream: '', preview: '', screenshot: '',
+              scene: { __typename: 'Scene', id: 'scene-3', title: '', files: [], performers: [] },
+              primary_tag: { __typename: 'Tag', id: 'tag-1', name: 'Knock Knock' },
+              tags: [],
+            },
+          ],
+        },
+      };
     } else if (name === 'FindTagsForSelect' || name === 'FindTagsByIDForSelect') {
       // TagIDSelect's own search/by-id queries go through a separate Apollo client this
       // bundle's compiled copy of src/core/StashService creates for itself (an HttpLink
@@ -154,7 +177,12 @@ async function run() {
       StashService: { getClient: () => apolloClient },
     },
     register: { route: (path, component) => { window.__registeredPath = path; window.__registeredComponent = component; } },
-    patch: { before: (name, fn) => { if (name === 'MainNavBar.MenuItems') window.__navBeforeFn = fn; } },
+    patch: {
+      before: (name, fn) => {
+        if (name === 'MainNavBar.MenuItems') window.__navBeforeFn = fn;
+        if (name === 'FilteredSceneMarkerList') window.__filteredSceneMarkerListBeforeFn = fn;
+      },
+    },
   };
 
   // Tests the actual deployed file (plugins/subtitleMarkers/subtitleMarkers.js), not a
@@ -180,6 +208,86 @@ async function run() {
   });
   console.log('C2) nav link label is exactly "Marker":', navContainer.textContent.trim() === 'nativeMarker');
   console.log('C3) nav link keeps its closed-captioning icon:', !!navContainer.querySelector('svg.nav-menu-icon'));
+
+  // ---------------------------------------------------------------------
+  // "Play All (Filtered)" on Stash's own native Markers list (FilteredSceneMarkerList's
+  // extraOperations prop) - exercised directly against the captured before() hook, the same
+  // real queryFindSceneMarkers (src/core/StashService) this plugin calls, rather than
+  // rendering the whole native page (which isn't this plugin's own component to own).
+  // ---------------------------------------------------------------------
+
+  function makeMockFilter(props) {
+    return Object.assign(
+      {
+        currentPage: 1,
+        itemsPerPage: 40,
+        taggedOnly: false,
+        clone() {
+          return Object.assign({}, this);
+        },
+        // The real ListFilterModel methods queryFindSceneMarkers actually calls.
+        makeFindFilter() {
+          return { page: this.currentPage, per_page: this.itemsPerPage };
+        },
+        makeFilter() {
+          return { taggedOnly: this.taggedOnly };
+        },
+      },
+      props
+    );
+  }
+
+  console.log('C4) "FilteredSceneMarkerList" patch registered:', typeof window.__filteredSceneMarkerListBeforeFn === 'function');
+
+  const patchedProps = window.__filteredSceneMarkerListBeforeFn({ extraOperations: [{ text: 'existing op' }] })[0];
+  console.log('C5) an existing extraOperations entry is kept, not replaced:', patchedProps.extraOperations.some((o) => o.text === 'existing op'));
+  const playAllFilteredOp = patchedProps.extraOperations.find((o) => o.text === 'Play All (Filtered)');
+  console.log('C6) a "Play All (Filtered)" operation is added:', !!playAllFilteredOp);
+
+  console.log('C7) isDisplayed is false with no matching markers:', playAllFilteredOp.isDisplayed({ data: { findSceneMarkers: { count: 0 } } }) === false);
+  console.log('C8) isDisplayed is true once something matches:', playAllFilteredOp.isDisplayed({ data: { findSceneMarkers: { count: 2 } } }) === true);
+
+  window.sessionStorage.clear();
+  const openCalls = [];
+  const realOpen = window.open;
+  window.open = (url) => openCalls.push(url);
+
+  graphqlCalls.length = 0;
+  await playAllFilteredOp.onClick({}, makeMockFilter({ currentPage: 5, itemsPerPage: 20 }));
+
+  const findMarkersCall = graphqlCalls.find((c) => c.name === 'FindSceneMarkers');
+  console.log(
+    'C9) clicking it queries every matching marker, not just the current page:',
+    !!findMarkersCall && findMarkersCall.variables.filter.page === 1 && findMarkersCall.variables.filter.per_page === 1000
+  );
+
+  const queueFromMarkers = JSON.parse(window.sessionStorage.getItem('subtitleMarkersQueue') || 'null');
+  console.log(
+    'C10) the queue is built from the real query response (2 markers, 2 different scenes):',
+    !!queueFromMarkers && queueFromMarkers.items.length === 2 && queueFromMarkers.index === 0
+  );
+  console.log(
+    'C11) a marker with no title falls back to its primary tag\'s name:',
+    queueFromMarkers.items[0].sceneId === 'scene-1' && queueFromMarkers.items[0].text === 'Knock Knock'
+  );
+  console.log(
+    'C12) a marker with its own title uses that instead:',
+    queueFromMarkers.items[1].sceneId === 'scene-3' && queueFromMarkers.items[1].text === 'Custom title'
+  );
+  console.log('C13) it opens the first item in a new tab:', openCalls.length === 1 && openCalls[0] === '/scenes/scene-1?t=30&continue=true&autoplay=true');
+
+  // --- A page's own filterHook (e.g. a Tag's "Markers" tab, constraining to that tag) is
+  // re-applied here too, not silently dropped - see the comment on the before() hook itself.
+  window.sessionStorage.clear();
+  graphqlCalls.length = 0;
+  const hookedProps = window.__filteredSceneMarkerListBeforeFn({ filterHook: (f) => { const h = f.clone(); h.taggedOnly = true; return h; } })[0];
+  const hookedOp = hookedProps.extraOperations.find((o) => o.text === 'Play All (Filtered)');
+  await hookedOp.onClick({}, makeMockFilter());
+  const hookedCall = graphqlCalls.find((c) => c.name === 'FindSceneMarkers');
+  console.log('C14) a page\'s own filterHook is applied before querying, not ignored:', !!hookedCall && hookedCall.variables.scene_marker_filter.taggedOnly === true);
+
+  window.open = realOpen;
+  window.sessionStorage.clear();
 
   const emotionCache = createEmotionCache({ key: 'css' });
   function Shell({ children }) {
