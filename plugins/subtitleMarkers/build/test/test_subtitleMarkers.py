@@ -84,6 +84,28 @@ class ParseSrtTests(unittest.TestCase):
     def test_empty_content_yields_no_cues(self):
         self.assertEqual(parse_srt(""), [])
 
+    def test_strips_html_style_formatting_tags(self):
+        # A phrase split by a closing tag ("<i>failed</i> to complete") must still read as
+        # one continuous phrase, or a search for "failed to" would never match it.
+        content = "1\n00:00:01,000 --> 00:00:02,000\nThe operation <i>failed</i> to complete\n"
+        cues = parse_srt(content)
+        self.assertEqual(cues, [(1.0, "The operation failed to complete")])
+
+    def test_strips_font_color_tags(self):
+        content = '1\n00:00:01,000 --> 00:00:02,000\n<font color="#ffff00">Careful</font> now\n'
+        cues = parse_srt(content)
+        self.assertEqual(cues, [(1.0, "Careful now")])
+
+    def test_strips_ass_override_blocks(self):
+        content = "1\n00:00:01,000 --> 00:00:02,000\n{\\an8}Top of screen\n"
+        cues = parse_srt(content)
+        self.assertEqual(cues, [(1.0, "Top of screen")])
+
+    def test_a_formatting_only_line_does_not_leave_a_stray_space(self):
+        content = "1\n00:00:01,000 --> 00:00:03,000\n<i>\nSpoken line\n</i>\n"
+        cues = parse_srt(content)
+        self.assertEqual(cues, [(1.0, "Spoken line")])
+
 
 class CandidateVideoPrefixesTests(unittest.TestCase):
     def test_non_srt_file_has_no_candidates(self):
@@ -315,6 +337,29 @@ class RunIntegrationTests(unittest.TestCase):
         stash = FakeStash({video_path: "scene-1"})
 
         result = run(self.tmpdir.name, "hello", "tag-1", "t", stash)
+
+        self.assertEqual(result["created"], 1)
+
+    def test_search_matches_as_a_substring_within_a_word(self):
+        # "fail" must match "failed" (and "failure", "failing", ...) - a plain substring
+        # search, not a whole-word-only one.
+        self.write_srt("movie.srt", "1\n00:00:05,000 --> 00:00:06,000\nThe operation failed to complete\n")
+        video_path = os.path.join(self.tmpdir.name, "movie.mp4")
+        stash = FakeStash({video_path: "scene-1"})
+
+        result = run(self.tmpdir.name, "fail", "tag-1", "t", stash)
+
+        self.assertEqual(result["created"], 1)
+
+    def test_search_matches_a_phrase_split_by_an_inline_formatting_tag(self):
+        self.write_srt(
+            "movie.srt",
+            "1\n00:00:05,000 --> 00:00:06,000\nThe operation <i>failed</i> to complete\n",
+        )
+        video_path = os.path.join(self.tmpdir.name, "movie.mp4")
+        stash = FakeStash({video_path: "scene-1"})
+
+        result = run(self.tmpdir.name, "failed to", "tag-1", "t", stash)
 
         self.assertEqual(result["created"], 1)
 

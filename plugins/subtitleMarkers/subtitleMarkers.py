@@ -16,9 +16,20 @@ SRT_TIME_RE = re.compile(
     r"(\d{1,2}):(\d{2}):(\d{2})[,.](\d{3})\s*-->\s*(\d{1,2}):(\d{2}):(\d{2})[,.](\d{3})"
 )
 
+# HTML-style tags (<i>, <b>, <font color="...">, their closing tags, ...) and ASS/SSA
+# override blocks ({\an8}, {\pos(400,300)}, ...) - both common in real .srt files.
+SRT_FORMATTING_RE = re.compile(r"<[^>]*>|\{\\[^}]*\}")
+
 
 def srt_timestamp_to_seconds(h, m, s, ms):
     return int(h) * 3600 + int(m) * 60 + int(s) + int(ms) / 1000.0
+
+
+def strip_srt_formatting(text):
+    """Removes inline formatting markup so it can't split a phrase a search is looking
+    for - e.g. "<i>failed</i> to complete" would otherwise never match "failed to", since
+    the closing tag sits between the two words."""
+    return SRT_FORMATTING_RE.sub("", text)
 
 
 def parse_srt(content):
@@ -45,7 +56,8 @@ def parse_srt(content):
             continue
 
         start = srt_timestamp_to_seconds(*match.groups()[0:4])
-        text = " ".join(line.strip() for line in lines[time_line_index + 1 :] if line.strip())
+        stripped_lines = (strip_srt_formatting(line).strip() for line in lines[time_line_index + 1 :])
+        text = re.sub(r"\s+", " ", " ".join(line for line in stripped_lines if line)).strip()
         if text:
             cues.append((start, text))
 
