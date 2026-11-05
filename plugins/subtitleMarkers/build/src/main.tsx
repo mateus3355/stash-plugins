@@ -242,6 +242,9 @@ function SubtitleMarkersPage({ libraryPaths }: { libraryPaths: string[] }) {
         <p className="text-muted">
           {results.length} match{results.length === 1 ? "" : "es"}:
         </p>
+        <Button size="sm" variant="secondary" className="mb-2" onClick={() => handlePlayAllInQueue(results)}>
+          Play All in Queue
+        </Button>
         <ul className="list-unstyled">
           {results.map((r, i) => (
             <li key={i} className="subtitle-markers-result">
@@ -388,3 +391,237 @@ PluginApi.patch.before("MainNavBar.MenuItems", (props: any) => {
     return [props];
   }
 });
+
+// ---------------------------------------------------------------------
+// "Play All in Queue" - plays through every search result in order, each
+// seeking to its own timestamp, with a short preview window per hit before
+// auto-advancing. Stash's own scene queue (SceneQueue/continuePlaylist,
+// src/models/sceneQueue.ts) only ever restarts each *subsequent* scene from
+// 0 - it has no concept of a per-item start time - so it can't drive this on
+// its own; this plugin tracks queue position itself instead.
+//
+// The widget/listeners below aren't a real PatchComponent (nothing patches
+// "the scene player page" as a whole) - same situation, and same fix, as
+// Folder Browser's "open containing folder" button: watch the DOM for the
+// scene player with a MutationObserver and inject into it directly, outside
+// React's own tree. That also means cross-scene advances use a real
+// navigation (window.location.assign), not history.push - there's no Router
+// context out here to push through, same reasoning Folder Browser's own
+// README gives for using a plain <a href>.
+// ---------------------------------------------------------------------
+
+const QUEUE_STORAGE_KEY = "subtitleMarkersQueue";
+const QUEUE_WIDGET_ID = "subtitle-markers-queue-widget";
+// How long to let each hit play before auto-advancing - a fixed preview window, not the
+// subtitle cue's own (often much shorter) duration, so there's enough context around the
+// moment to actually place it. Still capped by the video's own natural end for a hit near
+// the end of a short clip (the "ended" listener below fires first in that case).
+const QUEUE_PREVIEW_SECONDS = 20;
+
+interface QueueState {
+  items: SearchResult[];
+  index: number;
+}
+
+function loadQueue(): QueueState | null {
+  try {
+    const raw = window.sessionStorage.getItem(QUEUE_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || !Array.isArray(parsed.items) || typeof parsed.index !== "number") return null;
+    if (parsed.index < 0 || parsed.index >= parsed.items.length) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function saveQueue(queue: QueueState) {
+  try {
+    window.sessionStorage.setItem(QUEUE_STORAGE_KEY, JSON.stringify(queue));
+  } catch {
+    // sessionStorage can be unavailable (private browsing, quota) - the only cost is the
+    // queue not surviving a reload, not a crash.
+  }
+}
+
+function clearQueue() {
+  try {
+    window.sessionStorage.removeItem(QUEUE_STORAGE_KEY);
+  } catch {
+    // ignore
+  }
+}
+
+function currentQueueSceneId(): string | null {
+  const m = window.location.pathname.match(/^\/scenes\/([^/?]+)/);
+  return m ? m[1] : null;
+}
+
+function queueSceneLink(item: SearchResult) {
+  // continue=true matters here: Scene.tsx only disables its own native looping when
+  // continuePlaylist is true (permitLoop={!continuePlaylist}), and HTML5 video never fires
+  // "ended" while looping - without this, a hit in a scene shorter than
+  // QUEUE_PREVIEW_SECONDS would just loop forever instead of ever advancing.
+  return `/scenes/${item.sceneId}?t=${item.seconds}&continue=true&autoplay=true`;
+}
+
+function handlePlayAllInQueue(results: SearchResult[]) {
+  if (!results || results.length === 0) return;
+  saveQueue({ items: results, index: 0 });
+  window.location.assign(queueSceneLink(results[0]));
+}
+
+let queueAdvanceTimer: ReturnType<typeof setTimeout> | null = null;
+
+function clearQueueAdvanceTimer() {
+  if (queueAdvanceTimer !== null) {
+    clearTimeout(queueAdvanceTimer);
+    queueAdvanceTimer = null;
+  }
+}
+
+function removeQueueWidget() {
+  clearQueueAdvanceTimer();
+  const existing = document.getElementById(QUEUE_WIDGET_ID);
+  if (existing) existing.remove();
+}
+
+// Jumps to a queue index: seeks in place when it's the scene already on screen (navigating
+// to the same route with just a different ?t= doesn't reliably re-seek an already-mounted
+// player), or does a real navigation otherwise.
+function goToQueueIndex(queue: QueueState, index: number) {
+  clearQueueAdvanceTimer();
+  if (index < 0 || index >= queue.items.length) {
+    clearQueue();
+    removeQueueWidget();
+    return;
+  }
+  const item = queue.items[index];
+  saveQueue({ items: queue.items, index });
+  if (item.sceneId === currentQueueSceneId()) {
+    const video = document.querySelector<HTMLVideoElement>(".video-js video");
+    if (video) {
+      video.currentTime = item.seconds;
+      video.play().catch(() => {});
+    }
+    ensureQueueWidget();
+  } else {
+    // Navigating away is effectively immediate in a real browser (the page unloads, taking
+    // this widget with it), but remove it explicitly rather than leaving it visible - and
+    // clickable, in a now-stale position - for however long that takes.
+    removeQueueWidget();
+    window.location.assign(queueSceneLink(item));
+  }
+}
+
+function handleQueueVideoEnded(e: Event) {
+  const target = e.target as HTMLElement | null;
+  if (!target || target.tagName !== "VIDEO") return;
+  const queue = loadQueue();
+  if (!queue || queue.items[queue.index].sceneId !== currentQueueSceneId()) return;
+  goToQueueIndex(queue, queue.index + 1);
+}
+// capture: true - "ended" doesn't bubble, so a listener on document only ever sees it this way.
+document.addEventListener("ended", handleQueueVideoEnded, true);
+
+function ensureQueueWidget() {
+  try {
+    const queue = loadQueue();
+    const sceneId = currentQueueSceneId();
+    if (!queue || !sceneId || sceneId !== queue.items[queue.index].sceneId) {
+      removeQueueWidget();
+      return;
+    }
+
+    let widget = document.getElementById(QUEUE_WIDGET_ID);
+    if (!widget) {
+      widget = document.createElement("div");
+      widget.id = QUEUE_WIDGET_ID;
+      document.body.appendChild(widget);
+    }
+
+    // This runs on every DOM mutation the observer below sees - constantly, during playback
+    // (time display, buffered bar, etc). Only re-render (and reschedule the auto-advance
+    // timer) when the item actually being shown changed.
+    const key = sceneId + ":" + queue.index;
+    if (widget.dataset.subtitleMarkersQueueKey === key) return;
+    widget.dataset.subtitleMarkersQueueKey = key;
+
+    const item = queue.items[queue.index];
+    clearQueueAdvanceTimer();
+    queueAdvanceTimer = setTimeout(() => {
+      queueAdvanceTimer = null;
+      const latest = loadQueue();
+      if (latest && latest.items[latest.index].sceneId === currentQueueSceneId()) {
+        goToQueueIndex(latest, latest.index + 1);
+      }
+    }, QUEUE_PREVIEW_SECONDS * 1000);
+
+    const widgetStyle: Record<string, string> = {
+      position: "fixed",
+      right: "16px",
+      bottom: "16px",
+      zIndex: "2000",
+      background: "rgba(0, 0, 0, 0.85)",
+      color: "#fff",
+      padding: "10px 14px",
+      borderRadius: "6px",
+      maxWidth: "320px",
+      boxShadow: "0 2px 8px rgba(0, 0, 0, 0.5)",
+    };
+
+    PluginApi.ReactDOM.render(
+      <div className="subtitle-markers-queue-widget" style={widgetStyle}>
+        <div className="subtitle-markers-queue-position">
+          <strong>
+            Marker {queue.index + 1} of {queue.items.length}
+          </strong>
+        </div>
+        <div className="subtitle-markers-queue-text text-truncate" style={{ opacity: 0.85, margin: "4px 0" }}>
+          {item.text}
+        </div>
+        <div className="subtitle-markers-queue-controls">
+          <Button
+            size="sm"
+            variant="secondary"
+            className="mr-1"
+            disabled={queue.index === 0}
+            onClick={() => goToQueueIndex(queue, queue.index - 1)}
+          >
+            Prev
+          </Button>
+          <Button
+            size="sm"
+            variant="secondary"
+            className="mr-1"
+            disabled={queue.index === queue.items.length - 1}
+            onClick={() => goToQueueIndex(queue, queue.index + 1)}
+          >
+            Next
+          </Button>
+          <Button
+            size="sm"
+            variant="danger"
+            onClick={() => {
+              clearQueue();
+              removeQueueWidget();
+            }}
+          >
+            Stop
+          </Button>
+        </div>
+      </div>,
+      widget
+    );
+  } catch (e) {
+    console.error("[SubtitleMarkers] Failed to update the queue widget:", e);
+    removeQueueWidget();
+  }
+}
+
+new MutationObserver(ensureQueueWidget).observe(document.body, { childList: true, subtree: true });
+// Covers the page already being on the right scene when this script first runs - which is
+// exactly how this plugin advances between different scenes (a real navigation, not an SPA
+// route change), so this is reached on every cross-scene queue advance, not just a fresh load.
+ensureQueueWidget();

@@ -116,8 +116,12 @@ async function run() {
         runPluginOperation: {
           results: [
             { sceneId: 'scene-1', sceneTitle: 'Ember Evening', seconds: 12.5, text: 'Someone said knock knock' },
+            // Second hit in the SAME scene, later on - exercises the in-place seek path.
+            { sceneId: 'scene-1', sceneTitle: 'Ember Evening', seconds: 40, text: 'Knock knock again' },
+            // Third hit in a DIFFERENT scene - exercises the cross-scene navigation path.
+            { sceneId: 'scene-2', sceneTitle: 'Morning Light', seconds: 5, text: 'One more knock knock' },
           ],
-          matchedCues: 1,
+          matchedCues: 3,
           unmatchedSrt: 0,
         },
       };
@@ -263,6 +267,101 @@ async function run() {
   const resultLink = container.querySelector('.subtitle-markers-result a');
   console.log('R) a result link is shown, pointing at the scene and timestamp:', !!resultLink && resultLink.getAttribute('href') === '/scenes/scene-1?t=12.5');
   console.log('S) the result shows the scene title and matched subtitle text:', container.textContent.includes('Ember Evening') && container.textContent.includes('knock knock'));
+
+  // ---------------------------------------------------------------------
+  // "Play All in Queue" - plays through all 3 results in order: two hits in scene-1 (an
+  // in-place seek between them), then one in scene-2 (a real navigation). window.location
+  // can't actually navigate in jsdom (and its .assign can't be mocked - Location is
+  // non-configurable even here), so "arriving" at each scene is simulated with
+  // history.pushState, same as the browser would leave window.location after a real one.
+  // ---------------------------------------------------------------------
+
+  window.sessionStorage.clear();
+  const playAllButton = Array.from(container.querySelectorAll('button')).find((b) => b.textContent === 'Play All in Queue');
+  console.log('U) "Play All in Queue" button is shown with results:', !!playAllButton);
+
+  TestUtils.Simulate.click(playAllButton);
+  const queueAfterPlayAll = JSON.parse(window.sessionStorage.getItem('subtitleMarkersQueue') || 'null');
+  console.log(
+    'V) clicking it saves all 3 results as the queue, starting at index 0:',
+    !!queueAfterPlayAll && queueAfterPlayAll.items.length === 3 && queueAfterPlayAll.index === 0
+  );
+
+  // The MutationObserver only sees actual DOM mutations, not history.pushState/sessionStorage
+  // changes on their own - a real cross-scene queue advance is a real navigation (full page
+  // load, re-running this whole script, which checks for an active queue unconditionally at
+  // the end), which this harmless no-op mutation stands in for after each simulated arrival.
+  function nudgeObserver() {
+    document.body.appendChild(document.createElement('span')).remove();
+  }
+
+  // Simulate having arrived at scene-1 (the first queue item) - a real video.js player
+  // structure, so the "ended"-listener/seek code can find the real <video> element.
+  window.history.pushState({}, '', '/scenes/scene-1');
+  const videoJsContainer = document.createElement('div');
+  videoJsContainer.className = 'video-js';
+  const video = document.createElement('video');
+  videoJsContainer.appendChild(video);
+  document.body.appendChild(videoJsContainer); // itself a real mutation - no nudge needed here
+  video.currentTime = 0;
+  video.play = () => Promise.resolve();
+  await new Promise((r) => setTimeout(r, 0));
+
+  function widgetText() {
+    const el = document.getElementById('subtitle-markers-queue-widget');
+    return el ? el.textContent : '';
+  }
+  console.log('W) the queue widget appears on the first item, showing its position and text:', widgetText().includes('Marker 1 of 3') && widgetText().includes('Someone said knock knock'));
+
+  function widgetButton(label) {
+    const el = document.getElementById('subtitle-markers-queue-widget');
+    return el ? Array.from(el.querySelectorAll('button')).find((b) => b.textContent === label) : null;
+  }
+  console.log('X) Prev is disabled on the first item:', widgetButton('Prev').disabled === true);
+
+  // --- Next: same scene (scene-1, item 2) - should seek in place, no navigation ---
+  TestUtils.Simulate.click(widgetButton('Next'));
+  console.log('Y) advancing to the same scene\'s second hit seeks the real <video> element:', video.currentTime === 40);
+  console.log('Z) ...without actually navigating away:', window.location.pathname === '/scenes/scene-1');
+  console.log('AA) the widget updates to show the second item:', widgetText().includes('Marker 2 of 3') && widgetText().includes('Knock knock again'));
+
+  // --- Next again: scene-2, item 3 - a different scene, so a real navigation is attempted.
+  // sessionStorage is updated before that happens either way (goToQueueIndex saves first) -
+  // and the widget disappears once we're (simulated as) still on scene-1 but the queue now
+  // points at scene-2, since ensureQueueWidget correctly treats that as "not this page".
+  TestUtils.Simulate.click(widgetButton('Next'));
+  const queueAfterCrossSceneNext = JSON.parse(window.sessionStorage.getItem('subtitleMarkersQueue') || 'null');
+  console.log('AB) the queue advances to index 2 (scene-2) even though navigation is simulated:', !!queueAfterCrossSceneNext && queueAfterCrossSceneNext.index === 2);
+  console.log('AC) the widget is removed once the page no longer matches the queue\'s current item:', !document.getElementById('subtitle-markers-queue-widget'));
+
+  // Simulate actually arriving at scene-2 (what a real navigation would have done).
+  window.history.pushState({}, '', '/scenes/scene-2');
+  nudgeObserver();
+  await new Promise((r) => setTimeout(r, 0));
+  console.log('AD) the widget reappears once on the right scene, showing the last item:', widgetText().includes('Marker 3 of 3') && widgetText().includes('One more knock knock'));
+  console.log('AE) Next is disabled on the last item:', widgetButton('Next').disabled === true);
+
+  // --- Ending the video on the last item empties the queue entirely ---
+  const endedEvent = new window.Event('ended', { bubbles: false });
+  video.dispatchEvent(endedEvent);
+  console.log('AF) the video "ending" on the last item clears the queue:', window.sessionStorage.getItem('subtitleMarkersQueue') === null);
+  console.log('AG) ...and removes the widget:', !document.getElementById('subtitle-markers-queue-widget'));
+
+  // --- Stop button also clears an in-progress queue ---
+  window.history.pushState({}, '', '/scenes/scene-1');
+  window.sessionStorage.setItem('subtitleMarkersQueue', JSON.stringify({ items: queueAfterPlayAll.items, index: 0 }));
+  nudgeObserver();
+  await new Promise((r) => setTimeout(r, 0));
+  const stopButton = widgetButton('Stop');
+  console.log('AH) the widget reappears for a freshly (re)started queue:', !!stopButton);
+  TestUtils.Simulate.click(stopButton);
+  console.log('AI) Stop clears the queue and removes the widget:', window.sessionStorage.getItem('subtitleMarkersQueue') === null && !document.getElementById('subtitle-markers-queue-widget'));
+
+  // Clean up the injected video-js fixture and go back to the search page's own route before
+  // the rest of the test continues interacting with `container`.
+  videoJsContainer.remove();
+  window.history.pushState({}, '', '/subtitle-markers');
+  window.sessionStorage.clear();
 
   // --- Turning on "Also create scene markers" reveals the tag/title fields and switches the
   // button back to the existing background-job marker-creation flow ---
