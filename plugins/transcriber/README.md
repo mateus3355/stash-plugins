@@ -33,13 +33,21 @@ Pairs naturally with the **Subtitle Markers** plugin in this same repo -
 
 ## Setup: the sudo rules this plugin needs
 
-Stash's plugin process runs as whatever user runs the Stash server itself -
-not root - so it can't control a systemd unit, or rewrite its own unit file,
-without being explicitly allowed to. Without these, Start/Stop/Restart and
-the folder/language picker will fail with a permissions/password error
-(which the dashboard shows, rather than hanging or crashing - `plugin.py`
-calls `sudo -n` everywhere, which fails immediately instead of waiting for a
-password that can never come non-interactively).
+**If Stash itself already runs as root** (common in a root-only container),
+skip this whole section - `plugin.py` checks `os.geteuid()` and runs
+`systemctl`/`install_service.sh` directly with no `sudo` prefix at all in
+that case, since there's nothing to elevate to (and no guarantee `sudo` is
+even installed on a root-only box - many aren't). Start/Stop/Restart and
+the folder/language picker just work as-is.
+
+Otherwise: Stash's plugin process runs as whatever non-root user runs the
+Stash server, so it can't control a systemd unit, or rewrite its own unit
+file, without being explicitly allowed to. Without the rules below,
+Start/Stop/Restart and the folder/language picker will fail with a
+permissions/password error (which the dashboard shows, rather than hanging
+or crashing - `plugin.py` calls `sudo -n` in this case, which fails
+immediately instead of waiting for a password that can never come
+non-interactively).
 
 1. Find the user Stash itself runs as (e.g. check your Stash systemd unit's
    `User=` line, or `ps -o user= -p "$(pgrep -f '[s]tash$' | head -1)'`).

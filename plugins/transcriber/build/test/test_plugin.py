@@ -20,6 +20,23 @@ class FakeCompletedProcess:
         self.returncode = returncode
 
 
+class PrivilegedArgsTests(unittest.TestCase):
+    def test_prefixes_sudo_n_when_not_root(self):
+        with unittest.mock.patch("os.geteuid", return_value=1000):
+            self.assertEqual(plugin.privileged_args(["systemctl", "start", "x"]), ["sudo", "-n", "systemctl", "start", "x"])
+
+    def test_returns_the_command_unchanged_when_already_root(self):
+        with unittest.mock.patch("os.geteuid", return_value=0):
+            self.assertEqual(plugin.privileged_args(["systemctl", "start", "x"]), ["systemctl", "start", "x"])
+
+    def test_does_not_mutate_the_input_list(self):
+        original = ["systemctl", "start", "x"]
+        with unittest.mock.patch("os.geteuid", return_value=0):
+            result = plugin.privileged_args(original)
+        result.append("extra")
+        self.assertEqual(original, ["systemctl", "start", "x"])
+
+
 class ReadJsonTests(unittest.TestCase):
     def setUp(self):
         self.tmpdir = tempfile.TemporaryDirectory()
@@ -133,7 +150,8 @@ class ConfigureTests(unittest.TestCase):
             'ExecStart=/x/transcriber.py "/old/path" --language en --watch 300\n'
         )
         run = unittest.mock.Mock(return_value=FakeCompletedProcess(returncode=0))
-        plugin.configure("/mnt/videos", "pt", run=run, unit_path=self.unit_path)
+        with unittest.mock.patch("os.geteuid", return_value=1000):
+            plugin.configure("/mnt/videos", "pt", run=run, unit_path=self.unit_path)
         run.assert_called_once_with(
             ["sudo", "-n", plugin.INSTALL_SCRIPT, "/mnt/videos", "pt", "mateus"],
             capture_output=True, text=True, timeout=900,
@@ -141,9 +159,21 @@ class ConfigureTests(unittest.TestCase):
 
     def test_omits_the_user_argument_when_not_previously_installed(self):
         run = unittest.mock.Mock(return_value=FakeCompletedProcess(returncode=0))
-        plugin.configure("/mnt/videos", "en", run=run, unit_path=self.unit_path)
+        with unittest.mock.patch("os.geteuid", return_value=1000):
+            plugin.configure("/mnt/videos", "en", run=run, unit_path=self.unit_path)
         run.assert_called_once_with(
             ["sudo", "-n", plugin.INSTALL_SCRIPT, "/mnt/videos", "en"],
+            capture_output=True, text=True, timeout=900,
+        )
+
+    def test_skips_sudo_entirely_when_already_running_as_root(self):
+        # Common when Stash itself runs as root (e.g. a root-only container) - there's
+        # nothing to elevate to, and no guarantee sudo is even installed in that case.
+        run = unittest.mock.Mock(return_value=FakeCompletedProcess(returncode=0))
+        with unittest.mock.patch("os.geteuid", return_value=0):
+            plugin.configure("/mnt/videos", "en", run=run, unit_path=self.unit_path)
+        run.assert_called_once_with(
+            [plugin.INSTALL_SCRIPT, "/mnt/videos", "en"],
             capture_output=True, text=True, timeout=900,
         )
 
@@ -236,10 +266,21 @@ class ControlTests(unittest.TestCase):
 
     def test_start_calls_sudo_systemctl_non_interactively(self):
         run = unittest.mock.Mock(return_value=FakeCompletedProcess(returncode=0))
-        result = plugin.control("start", run=run)
+        with unittest.mock.patch("os.geteuid", return_value=1000):
+            result = plugin.control("start", run=run)
         self.assertEqual(result, {"ok": True})
         run.assert_called_once_with(
             ["sudo", "-n", "systemctl", "start", "transcriber.service"],
+            capture_output=True, text=True, timeout=30,
+        )
+
+    def test_skips_sudo_when_already_running_as_root(self):
+        run = unittest.mock.Mock(return_value=FakeCompletedProcess(returncode=0))
+        with unittest.mock.patch("os.geteuid", return_value=0):
+            result = plugin.control("start", run=run)
+        self.assertEqual(result, {"ok": True})
+        run.assert_called_once_with(
+            ["systemctl", "start", "transcriber.service"],
             capture_output=True, text=True, timeout=30,
         )
 

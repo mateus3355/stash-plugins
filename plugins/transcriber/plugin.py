@@ -33,6 +33,18 @@ USER_RE = re.compile(r"^User=(\S+)", re.MULTILINE)
 RECENT_FAILED_LIMIT = 20
 
 
+def privileged_args(args):
+    """Prefixes a command with `sudo -n`, unless this process is already root - which is
+    common when Stash itself runs as root (e.g. inside a container built that way), and in
+    that case there's nothing to elevate to, and no guarantee `sudo` is even installed (many
+    root-only setups never install it). -n still applies in the non-root case: fail
+    immediately rather than hang waiting for a password that will never come non-interactively.
+    Requires a sudoers rule for exactly this when not already root - see README."""
+    if hasattr(os, "geteuid") and os.geteuid() == 0:
+        return list(args)
+    return ["sudo", "-n"] + list(args)
+
+
 def read_json(path, default):
     try:
         with open(path, "r", encoding="utf-8") as f:
@@ -99,10 +111,7 @@ def control(action, run=None):
     if action not in ("start", "stop", "restart"):
         return {"error": f"unknown action: {action}"}
     try:
-        # -n: fail immediately rather than hang waiting for a password that will never come -
-        # this runs non-interactively from Stash's plugin process. Requires a sudoers rule
-        # granting exactly this command, non-interactively - see README.
-        result = run(["sudo", "-n", "systemctl", action, SERVICE_NAME], capture_output=True, text=True, timeout=30)
+        result = run(privileged_args(["systemctl", action, SERVICE_NAME]), capture_output=True, text=True, timeout=30)
     except Exception as e:  # noqa: BLE001
         return {"error": str(e)}
     if result.returncode != 0:
@@ -115,17 +124,17 @@ def configure(input_dir, language, run=None, unit_path=SERVICE_UNIT_PATH):
     """Re-runs install_service.sh to point the service at a different folder/language. That
     script itself validates the folder exists and the language code, writes the systemd unit,
     and does daemon-reload/enable/restart - this just shells out to it as root (needs a
-    broader sudoers grant than start/stop/restart: see README) and reports what happened.
-    Passes the CURRENTLY configured user back to it explicitly (if there is one) so changing
-    the folder doesn't also silently change which user the service runs as - install_service.sh
-    would otherwise default to whoever invoked sudo, i.e. the Stash process's own user."""
+    broader sudoers grant than start/stop/restart when not already root: see README) and
+    reports what happened. Passes the CURRENTLY configured user back to it explicitly (if
+    there is one) so changing the folder doesn't also silently change which user the service
+    runs as - install_service.sh would otherwise default to whoever invoked it."""
     if not input_dir or not isinstance(input_dir, str):
         return {"error": "inputDir is required"}
     if language not in LANGUAGES:
         return {"error": f"language must be one of {', '.join(LANGUAGES)} (got {language!r})"}
     run = run or subprocess.run
     current = get_current_config(unit_path)
-    args = ["sudo", "-n", INSTALL_SCRIPT, input_dir, language]
+    args = privileged_args([INSTALL_SCRIPT, input_dir, language])
     if current and current.get("user"):
         args.append(current["user"])
     try:
