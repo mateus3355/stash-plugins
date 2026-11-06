@@ -82,24 +82,17 @@ without watching the whole thing or editing scenes by hand one at a time.
   polling) and shows its results as soon as the search finishes, since
   there's nothing to write and no need to track progress separately.
 - **"Play All in Queue"** plays through every search result in order, in a
-  new tab (so the search page itself stays put) - each hit gets a ~20s
-  preview before auto-advancing to the next one (seeking in place if the
-  next hit is in the same scene, navigating if it's a different one), with
-  Prev/Next/Stop controls in a small overlay. The 20s countdown only runs
-  while the video is actually playing - pausing to read or think suspends
-  it, and resuming starts a fresh one, rather than silently auto-advancing
-  (and un-pausing) a video you deliberately paused. Needs a small Stash
-  core addition (`TimedSceneQueue`, `src/models/sceneQueue.ts`) this plugin
-  reuses directly rather than hand-rolling its own: Stash's existing scene
-  queue/"continue playlist" only ever restarts the *next* scene from 0 (no
-  per-item start time, and no way to queue the same scene twice), which
-  can't express "these N marker hits, in order" at all. The plugin's own
-  contribution on top of that native queue is just the preview countdown
-  (the native "continue" only ever advances once a video *fully* ends) and
-  the position/Prev/Next/Stop overlay (nothing shows this queue's progress
-  natively either) - driven from outside the scene player page the same way
-  its "open containing folder" counterpart in Folder Browser injects into
-  it, since neither is a real `PatchComponent`.
+  new tab (so the search page itself stays put) - needs a small Stash core
+  addition this plugin builds on rather than reimplementing its own version
+  of: Stash's scene queue (`SceneQueue`, `src/models/sceneQueue.ts`) now
+  lets an entry carry its own start time, and the same scene id can appear
+  more than once (two different matches in the same scene, say), each at
+  its own point - neither was possible before, which is what made a queue
+  of specific moments impossible to express natively. This plugin just
+  builds that real queue and opens it; everything else (the Queue tab's
+  position/thumbnails/Prev/Next/Random, the "Continue" checkbox, seeking in
+  place rather than reloading when the next entry is the same scene already
+  on screen) is Stash's own, not something reimplemented here.
 - **"Play All (Filtered)"** is the same queue, started from Stash's own
   native Markers list (and a Tag's "Markers" tab) instead of a search result
   list - it's a real `extraOperations` entry in that page's own "..."

@@ -272,7 +272,6 @@ async function run() {
   console.log('C7) isDisplayed is false with no matching markers:', playAllFilteredOp.isDisplayed({ data: { findSceneMarkers: { count: 0 } } }) === false);
   console.log('C8) isDisplayed is true once something matches:', playAllFilteredOp.isDisplayed({ data: { findSceneMarkers: { count: 2 } } }) === true);
 
-  window.sessionStorage.clear();
   const openCalls = [];
   const realOpen = window.open;
   window.open = (url) => openCalls.push(url);
@@ -286,27 +285,17 @@ async function run() {
     !!findMarkersCall && findMarkersCall.variables.filter.page === 1 && findMarkersCall.variables.filter.per_page === 1000
   );
 
-  const queueFromMarkers = JSON.parse(window.sessionStorage.getItem('subtitleMarkersQueue') || 'null');
+  // The queue is now a real native SceneQueue link - built straight from the query response
+  // (2 markers, 2 different scenes) and opened in exactly one new tab, with both entries'
+  // own scene id/start time encoded (qs=1:30, qs=3:90), not just the first.
+  console.log('C10) it opens exactly one new tab (not one per marker):', openCalls.length === 1);
   console.log(
-    'C10) the queue is built from the real query response (2 markers, 2 different scenes):',
-    !!queueFromMarkers && queueFromMarkers.items.length === 2 && queueFromMarkers.index === 0
-  );
-  console.log(
-    'C11) a marker with no title falls back to its primary tag\'s name:',
-    queueFromMarkers.items[0].sceneId === '1' && queueFromMarkers.items[0].text === 'Knock Knock'
-  );
-  console.log(
-    'C12) a marker with its own title uses that instead:',
-    queueFromMarkers.items[1].sceneId === '3' && queueFromMarkers.items[1].text === 'Custom title'
-  );
-  console.log(
-    'C13) it opens the first item in a new tab, as a real native timed queue link:',
-    openCalls.length === 1 && openCalls[0] === '/scenes/1?tq=1:30&tq=3:90&tqi=0&t=30&autoplay=true&continue=true'
+    'C13) it\'s a real native SceneQueue link with both markers\' own scene/time entries:',
+    openCalls[0] === '/scenes/1?qs=1:30&qs=3:90&qi=0&autoplay=true&continue=true&t=30'
   );
 
   // --- A page's own filterHook (e.g. a Tag's "Markers" tab, constraining to that tag) is
   // re-applied here too, not silently dropped - see the comment on the before() hook itself.
-  window.sessionStorage.clear();
   graphqlCalls.length = 0;
   const hookedProps = window.__filteredSceneMarkerListBeforeFn({ filterHook: (f) => { const h = f.clone(); h.taggedOnly = true; return h; } })[0];
   const hookedOp = hookedProps.extraOperations.find((o) => o.text === 'Play All (Filtered)');
@@ -467,154 +456,26 @@ async function run() {
   window.open = realOpenForCards;
 
   // ---------------------------------------------------------------------
-  // "Play All in Queue" - plays through all 3 results in order: two hits in 1 (an
-  // in-place seek between them), then one in 2 (a real navigation). window.location
-  // can't actually navigate in jsdom (and its .assign can't be mocked - Location is
-  // non-configurable even here), so "arriving" at each scene is simulated with
-  // history.pushState, same as the browser would leave window.location after a real one.
+  // "Play All in Queue" - builds a real native SceneQueue link (Stash core now understands a
+  // per-entry start time, and the same scene id appearing more than once, natively) and opens
+  // it in a new tab. Everything after that - position, Prev/Next, "Continue", seeking in
+  // place for the same scene's next entry - is the native Queue tab's job now, not this
+  // plugin's; nothing left here to test but that the right link gets opened.
   // ---------------------------------------------------------------------
 
-  window.sessionStorage.clear();
   const playAllButton = Array.from(container.querySelectorAll('button')).find((b) => b.textContent === 'Play All in Queue');
   console.log('U) "Play All in Queue" button is shown with results:', !!playAllButton);
 
+  const queueOpenCalls = [];
+  const realOpenForQueue = window.open;
+  window.open = (url) => queueOpenCalls.push(url);
+
   TestUtils.Simulate.click(playAllButton);
-  const queueAfterPlayAll = JSON.parse(window.sessionStorage.getItem('subtitleMarkersQueue') || 'null');
   console.log(
-    'V) clicking it saves all 3 results as the queue, starting at index 0:',
-    !!queueAfterPlayAll && queueAfterPlayAll.items.length === 3 && queueAfterPlayAll.index === 0
+    'V) clicking it opens a real native SceneQueue link (per-entry qs=<id>:<t>, qi=0) in a new tab:',
+    queueOpenCalls.length === 1 && queueOpenCalls[0] === '/scenes/1?qs=1:12.5&qs=1:40&qs=2:5&qi=0&autoplay=true&continue=true&t=12.5'
   );
-
-  // The MutationObserver only sees actual DOM mutations, not history.pushState/sessionStorage
-  // changes on their own - a real cross-scene queue advance is a real navigation (full page
-  // load, re-running this whole script, which checks for an active queue unconditionally at
-  // the end), which this harmless no-op mutation stands in for after each simulated arrival.
-  function nudgeObserver() {
-    document.body.appendChild(document.createElement('span')).remove();
-  }
-
-  // Simulate having arrived at 1 (the first queue item) - a real video.js player
-  // structure, so the "ended"-listener/seek code can find the real <video> element.
-  window.history.pushState({}, '', '/scenes/1');
-  const videoJsContainer = document.createElement('div');
-  videoJsContainer.className = 'video-js';
-  const video = document.createElement('video');
-  videoJsContainer.appendChild(video);
-  document.body.appendChild(videoJsContainer); // itself a real mutation - no nudge needed here
-  video.currentTime = 0;
-  video.play = () => Promise.resolve();
-  await new Promise((r) => setTimeout(r, 0));
-
-  function widgetText() {
-    const el = document.getElementById('subtitle-markers-queue-widget');
-    return el ? el.textContent : '';
-  }
-  console.log('W) the queue widget appears on the first item, showing its position and text:', widgetText().includes('Marker 1 of 3') && widgetText().includes('Someone said knock knock'));
-
-  function widgetButton(label) {
-    const el = document.getElementById('subtitle-markers-queue-widget');
-    return el ? Array.from(el.querySelectorAll('button')).find((b) => b.textContent === label) : null;
-  }
-  console.log('X) Prev is disabled on the first item:', widgetButton('Prev').disabled === true);
-
-  // --- Next: same scene (1, item 2) - should seek in place, no navigation ---
-  TestUtils.Simulate.click(widgetButton('Next'));
-  console.log('Y) advancing to the same scene\'s second hit seeks the real <video> element:', video.currentTime === 40);
-  console.log('Z) ...without actually navigating away:', window.location.pathname === '/scenes/1');
-  console.log('AA) the widget updates to show the second item:', widgetText().includes('Marker 2 of 3') && widgetText().includes('Knock knock again'));
-
-  // --- Next again: 2, item 3 - a different scene, so a real navigation is attempted.
-  // sessionStorage is updated before that happens either way (goToQueueIndex saves first) -
-  // and the widget disappears once we're (simulated as) still on 1 but the queue now
-  // points at 2, since ensureQueueWidget correctly treats that as "not this page".
-  TestUtils.Simulate.click(widgetButton('Next'));
-  const queueAfterCrossSceneNext = JSON.parse(window.sessionStorage.getItem('subtitleMarkersQueue') || 'null');
-  console.log('AB) the queue advances to index 2 (2) even though navigation is simulated:', !!queueAfterCrossSceneNext && queueAfterCrossSceneNext.index === 2);
-  console.log('AC) the widget is removed once the page no longer matches the queue\'s current item:', !document.getElementById('subtitle-markers-queue-widget'));
-
-  // Simulate actually arriving at 2 (what a real navigation would have done).
-  window.history.pushState({}, '', '/scenes/2');
-  nudgeObserver();
-  await new Promise((r) => setTimeout(r, 0));
-  console.log('AD) the widget reappears once on the right scene, showing the last item:', widgetText().includes('Marker 3 of 3') && widgetText().includes('One more knock knock'));
-  console.log('AE) Next is disabled on the last item:', widgetButton('Next').disabled === true);
-
-  // --- Ending the video on the last item empties the queue entirely ---
-  const endedEvent = new window.Event('ended', { bubbles: false });
-  video.dispatchEvent(endedEvent);
-  console.log('AF) the video "ending" on the last item clears the queue:', window.sessionStorage.getItem('subtitleMarkersQueue') === null);
-  console.log('AG) ...and removes the widget:', !document.getElementById('subtitle-markers-queue-widget'));
-
-  // --- Stop button also clears an in-progress queue ---
-  window.history.pushState({}, '', '/scenes/1');
-  window.sessionStorage.setItem('subtitleMarkersQueue', JSON.stringify({ items: queueAfterPlayAll.items, index: 0 }));
-  nudgeObserver();
-  await new Promise((r) => setTimeout(r, 0));
-  const stopButton = widgetButton('Stop');
-  console.log('AH) the widget reappears for a freshly (re)started queue:', !!stopButton);
-  TestUtils.Simulate.click(stopButton);
-  console.log('AI) Stop clears the queue and removes the widget:', window.sessionStorage.getItem('subtitleMarkersQueue') === null && !document.getElementById('subtitle-markers-queue-widget'));
-
-  // ---------------------------------------------------------------------
-  // Regression: the auto-advance preview timer used to run on a fixed wall-clock schedule
-  // regardless of whether the video was actually playing - pausing to read/think didn't stop
-  // the countdown, so it could silently fire (and, for a same-scene advance, force-call
-  // video.play()) moments later, "unpausing" a video the user had deliberately paused. It's
-  // now driven by the video's own play/pause events instead. Speeds up just this plugin's
-  // preview-countdown setTimeout calls (20000ms) so the test doesn't really wait 20s - other
-  // timers (e.g. the job-polling interval later in this file) are left alone.
-  // ---------------------------------------------------------------------
-  const realSetTimeout = window.setTimeout;
-  window.setTimeout = (cb, delay, ...args) => (delay === 20000 ? realSetTimeout(cb, 40, ...args) : realSetTimeout(cb, delay, ...args));
-
-  // jsdom doesn't implement real media playback - dispatching a "play"/"pause" Event alone
-  // doesn't change a <video>'s own .paused (it stays permanently true, the default, since
-  // nothing ever really plays) - .paused itself has to be driven the same way for these two
-  // simulated helpers to mean what they say.
-  let videoPlaying = false;
-  Object.defineProperty(video, 'paused', { get: () => !videoPlaying, configurable: true });
-  function simulatePlay() {
-    videoPlaying = true;
-    video.dispatchEvent(new window.Event('play'));
-  }
-  function simulatePause() {
-    videoPlaying = false;
-    video.dispatchEvent(new window.Event('pause'));
-  }
-
-  window.history.pushState({}, '', '/scenes/1');
-  window.sessionStorage.setItem('subtitleMarkersQueue', JSON.stringify({ items: queueAfterPlayAll.items, index: 0 }));
-  nudgeObserver();
-  await new Promise((r) => realSetTimeout(r, 0));
-
-  video.currentTime = 12.5;
-  simulatePlay();
-  simulatePause();
-  // Paused immediately after playing - well past the (sped-up) countdown, confirm it never
-  // fired: still on the first item, video untouched.
-  await new Promise((r) => realSetTimeout(r, 60));
-  console.log(
-    'AJ) pausing cancels the pending auto-advance - it does not fire while paused:',
-    JSON.parse(window.sessionStorage.getItem('subtitleMarkersQueue')).index === 0 && video.currentTime === 12.5
-  );
-
-  // Resuming starts a fresh countdown, which (still playing throughout) does fire this time.
-  simulatePlay();
-  await new Promise((r) => realSetTimeout(r, 60));
-  console.log(
-    'AK) resuming schedules a new countdown, which fires (and only now) while actually playing:',
-    JSON.parse(window.sessionStorage.getItem('subtitleMarkersQueue')).index === 1 && video.currentTime === 40
-  );
-
-  window.setTimeout = realSetTimeout;
-  window.sessionStorage.clear();
-  document.getElementById('subtitle-markers-queue-widget')?.remove();
-
-  // Clean up the injected video-js fixture and go back to the search page's own route before
-  // the rest of the test continues interacting with `container`.
-  videoJsContainer.remove();
-  window.history.pushState({}, '', '/subtitle-markers');
-  window.sessionStorage.clear();
+  window.open = realOpenForQueue;
 
   // --- Turning on "Also create scene markers" reveals the tag/title fields and switches the
   // button back to the existing background-job marker-creation flow ---

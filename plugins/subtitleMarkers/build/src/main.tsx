@@ -7,7 +7,7 @@ import { SceneCard } from "src/components/Scenes/SceneCard";
 import { TruncatedText } from "src/components/Shared/TruncatedText";
 import { useCardWidth, useContainerDimensions } from "src/components/Shared/GridCard/GridCard";
 import { queryFindSceneMarkers, queryFindScenesByID } from "src/core/StashService";
-import { TimedSceneQueue } from "src/models/sceneQueue";
+import { SceneQueue } from "src/models/sceneQueue";
 import TextUtils from "src/utils/text";
 
 import type ReactNS from "react";
@@ -496,292 +496,37 @@ PluginApi.patch.before("MainNavBar.MenuItems", (props: any) => {
 
 // ---------------------------------------------------------------------
 // "Play All in Queue" - plays through every search result in order, each seeking to its own
-// timestamp, with a short preview window per hit before auto-advancing. Stash's own player
-// now understands exactly this kind of queue natively (TimedSceneQueue, src/models/
-// sceneQueue.ts - added specifically to make this possible: unlike its own
-// SceneQueue/continuePlaylist, which can only ever restart each *next* scene from 0,
-// TimedSceneQueue carries a start time per item, and the same scene id can appear more than
-// once at different times). Its own ?tq=/?tqi= URL format is reused here via the real class
-// rather than hand-rolling a second copy of it, so both stay in sync automatically.
-//
-// What this plugin still adds on top, since the native player has no notion of it: a fixed
-// preview window per item (its own "continue" only advances once a video *fully* ends, which
-// defeats the point of quickly skimming many hits), and a position/Prev/Next/Stop overlay
-// (nothing shows this queue's progress natively either, since nothing wires it into
-// QueueViewer). Driving that from outside the scene player page - it isn't a real
-// PatchComponent, nothing patches "the scene player page" as a whole - uses the same
-// MutationObserver-based DOM injection as Folder Browser's "open containing folder" button,
-// which is also why cross-scene advances are a real navigation (window.location.assign), not
-// history.push - there's no Router context out here to push through.
+// timestamp. Stash's own scene queue (SceneQueue, src/models/sceneQueue.ts) now understands
+// exactly this natively - added specifically to make this possible: an entry can carry its
+// own start time, and the same scene id can appear more than once (e.g. two different
+// matches in the same scene), each at a different time. That native queue also drives the
+// Queue tab (position, titles/thumbnails, Prev/Next/Random, "Continue"), auto-advances once
+// a video ends if "Continue" is on, and seeks in place rather than reloading when the next
+// entry is the same scene already on screen - none of which this plugin has to reimplement
+// anymore. This just builds the link and opens it; everything after that is Stash's own.
 // ---------------------------------------------------------------------
 
-const QUEUE_STORAGE_KEY = "subtitleMarkersQueue";
-const QUEUE_WIDGET_ID = "subtitle-markers-queue-widget";
-// How long to let each hit play before auto-advancing - a fixed preview window, not the
-// subtitle cue's own (often much shorter) duration, so there's enough context around the
-// moment to actually place it. Still capped by the video's own natural end for a hit near
-// the end of a short clip (the "ended" listener below fires first in that case).
-const QUEUE_PREVIEW_SECONDS = 20;
-
-interface QueueState {
-  items: SearchResult[];
-  index: number;
+interface QueueItem {
+  sceneId: string;
+  seconds: number;
 }
 
-function loadQueue(): QueueState | null {
-  try {
-    const raw = window.sessionStorage.getItem(QUEUE_STORAGE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    if (!parsed || !Array.isArray(parsed.items) || typeof parsed.index !== "number") return null;
-    if (parsed.index < 0 || parsed.index >= parsed.items.length) return null;
-    return parsed;
-  } catch {
-    return null;
-  }
-}
-
-function saveQueue(queue: QueueState) {
-  try {
-    window.sessionStorage.setItem(QUEUE_STORAGE_KEY, JSON.stringify(queue));
-  } catch {
-    // sessionStorage can be unavailable (private browsing, quota) - the only cost is the
-    // queue not surviving a reload, not a crash.
-  }
-}
-
-function clearQueue() {
-  try {
-    window.sessionStorage.removeItem(QUEUE_STORAGE_KEY);
-  } catch {
-    // ignore
-  }
-}
-
-function currentQueueSceneId(): string | null {
-  const m = window.location.pathname.match(/^\/scenes\/([^/?]+)/);
-  return m ? m[1] : null;
-}
-
-// Builds the link for a given index using the real TimedSceneQueue - SearchResult carries
-// extra display-only fields (sceneTitle, text) that class has no need for, so this is purely
-// an adapter between the two shapes, not a second copy of the URL format itself.
-function queueLink(queue: QueueState, index: number, options: { autoPlay?: boolean; continue?: boolean } = {}) {
-  const timedQueue = new TimedSceneQueue(
-    queue.items.map((r) => ({ sceneID: r.sceneId, start: r.seconds })),
-    index
-  );
-  return timedQueue.makeLink(index, options);
-}
-
-function startQueue(items: SearchResult[]) {
+function startQueue(items: QueueItem[]) {
   if (!items || items.length === 0) return;
-  saveQueue({ items, index: 0 });
-  // Opens in a new tab (not window.location.assign) so the page that started the queue -
-  // the search results, or the filtered markers list - stays open. A new tab opened this
-  // way (no noopener/noreferrer, same origin) inherits a cloned copy of sessionStorage at
-  // the moment it opens, which is how its own copy of this script finds the queue just
-  // saved above. Every advance *after* that first jump still happens within that one new
-  // tab (goToQueueIndex below), not a fresh tab per hit.
-  window.open(queueLink({ items, index: 0 }, 0, { autoPlay: true, continue: true }), "_blank");
+  const queue = SceneQueue.fromSceneIDTimeList(
+    items.map((r) => ({ id: r.sceneId, start: r.seconds }))
+  );
+  // A new tab (not history.push/window.location.assign) so the page that started the queue -
+  // the search results, or the filtered markers list - stays open.
+  window.open(
+    queue.makeLink(items[0].sceneId, { sceneIndex: 0, start: items[0].seconds, autoPlay: true, continue: true }),
+    "_blank"
+  );
 }
 
 function handlePlayAllInQueue(results: SearchResult[]) {
   startQueue(results);
 }
-
-let queueAdvanceTimer: ReturnType<typeof setTimeout> | null = null;
-
-function clearQueueAdvanceTimer() {
-  if (queueAdvanceTimer !== null) {
-    clearTimeout(queueAdvanceTimer);
-    queueAdvanceTimer = null;
-  }
-}
-
-function removeQueueWidget() {
-  clearQueueAdvanceTimer();
-  const existing = document.getElementById(QUEUE_WIDGET_ID);
-  if (existing) existing.remove();
-}
-
-// Jumps to a queue index: seeks in place when it's the scene already on screen (navigating
-// to the same route with just a different ?t= doesn't reliably re-seek an already-mounted
-// player), or does a real navigation otherwise.
-function goToQueueIndex(queue: QueueState, index: number) {
-  clearQueueAdvanceTimer();
-  if (index < 0 || index >= queue.items.length) {
-    clearQueue();
-    removeQueueWidget();
-    return;
-  }
-  const item = queue.items[index];
-  saveQueue({ items: queue.items, index });
-  if (item.sceneId === currentQueueSceneId()) {
-    const video = document.querySelector<HTMLVideoElement>(".video-js video");
-    if (video) {
-      video.currentTime = item.seconds;
-      video.play().catch(() => {});
-    }
-    ensureQueueWidget();
-  } else {
-    // Navigating away is effectively immediate in a real browser (the page unloads, taking
-    // this widget with it), but remove it explicitly rather than leaving it visible - and
-    // clickable, in a now-stale position - for however long that takes.
-    removeQueueWidget();
-    window.location.assign(queueLink(queue, index, { autoPlay: true, continue: true }));
-  }
-}
-
-function handleQueueVideoEnded(e: Event) {
-  const target = e.target as HTMLElement | null;
-  if (!target || target.tagName !== "VIDEO") return;
-  const queue = loadQueue();
-  if (!queue || queue.items[queue.index].sceneId !== currentQueueSceneId()) return;
-  goToQueueIndex(queue, queue.index + 1);
-}
-
-// Starts (or restarts) the preview countdown - called whenever the video actually starts
-// playing (including an autoplay-triggered start), never on a fixed schedule independent of
-// playback. Pausing to read/think no longer costs anything off the countdown; it's just not
-// running while paused, same as the preview itself isn't advancing.
-function scheduleQueueAdvance() {
-  clearQueueAdvanceTimer();
-  const queue = loadQueue();
-  if (!queue || queue.items[queue.index].sceneId !== currentQueueSceneId()) return;
-  queueAdvanceTimer = setTimeout(() => {
-    queueAdvanceTimer = null;
-    const latest = loadQueue();
-    if (!latest || latest.items[latest.index].sceneId !== currentQueueSceneId()) return;
-    // Belt and suspenders: the pause handler below should already have cleared this timer,
-    // but never advance (and never call .play() from goToQueueIndex) on a paused video.
-    const video = document.querySelector<HTMLVideoElement>(".video-js video");
-    if (video && video.paused) return;
-    goToQueueIndex(latest, latest.index + 1);
-  }, QUEUE_PREVIEW_SECONDS * 1000);
-}
-
-function handleQueueVideoPlay(e: Event) {
-  const target = e.target as HTMLElement | null;
-  if (!target || target.tagName !== "VIDEO") return;
-  scheduleQueueAdvance();
-}
-
-function handleQueueVideoPause(e: Event) {
-  const target = e.target as HTMLElement | null;
-  if (!target || target.tagName !== "VIDEO") return;
-  clearQueueAdvanceTimer();
-}
-
-// capture: true - none of "ended"/"play"/"pause" bubble, so a listener on document only ever
-// sees them this way.
-document.addEventListener("ended", handleQueueVideoEnded, true);
-document.addEventListener("play", handleQueueVideoPlay, true);
-document.addEventListener("pause", handleQueueVideoPause, true);
-
-function ensureQueueWidget() {
-  try {
-    const queue = loadQueue();
-    const sceneId = currentQueueSceneId();
-    if (!queue || !sceneId || sceneId !== queue.items[queue.index].sceneId) {
-      removeQueueWidget();
-      return;
-    }
-
-    let widget = document.getElementById(QUEUE_WIDGET_ID);
-    if (!widget) {
-      widget = document.createElement("div");
-      widget.id = QUEUE_WIDGET_ID;
-      document.body.appendChild(widget);
-    }
-
-    // This runs on every DOM mutation the observer below sees - constantly, during playback
-    // (time display, buffered bar, etc). Only re-render when the item actually being shown
-    // changed - the auto-advance timer itself is scheduled from the video's own "play" event
-    // (handleQueueVideoPlay above), not from here, so it only ever runs while actually playing.
-    const key = sceneId + ":" + queue.index;
-    if (widget.dataset.subtitleMarkersQueueKey === key) return;
-    widget.dataset.subtitleMarkersQueueKey = key;
-
-    const item = queue.items[queue.index];
-    // Covers a video that was already playing (autoplay already fired its "play" event,
-    // perhaps before this key even changed) when this item became current - schedules
-    // nothing new if it's paused (nothing to override: handleQueueVideoPlay will pick it up
-    // whenever it next actually starts).
-    const existingVideo = document.querySelector<HTMLVideoElement>(".video-js video");
-    if (existingVideo && !existingVideo.paused) {
-      scheduleQueueAdvance();
-    } else {
-      clearQueueAdvanceTimer();
-    }
-
-    const widgetStyle: Record<string, string> = {
-      position: "fixed",
-      right: "16px",
-      bottom: "16px",
-      zIndex: "2000",
-      background: "rgba(0, 0, 0, 0.85)",
-      color: "#fff",
-      padding: "10px 14px",
-      borderRadius: "6px",
-      maxWidth: "320px",
-      boxShadow: "0 2px 8px rgba(0, 0, 0, 0.5)",
-    };
-
-    PluginApi.ReactDOM.render(
-      <div className="subtitle-markers-queue-widget" style={widgetStyle}>
-        <div className="subtitle-markers-queue-position">
-          <strong>
-            Marker {queue.index + 1} of {queue.items.length}
-          </strong>
-        </div>
-        <div className="subtitle-markers-queue-text text-truncate" style={{ opacity: 0.85, margin: "4px 0" }}>
-          {item.text}
-        </div>
-        <div className="subtitle-markers-queue-controls">
-          <Button
-            size="sm"
-            variant="secondary"
-            className="mr-1"
-            disabled={queue.index === 0}
-            onClick={() => goToQueueIndex(queue, queue.index - 1)}
-          >
-            Prev
-          </Button>
-          <Button
-            size="sm"
-            variant="secondary"
-            className="mr-1"
-            disabled={queue.index === queue.items.length - 1}
-            onClick={() => goToQueueIndex(queue, queue.index + 1)}
-          >
-            Next
-          </Button>
-          <Button
-            size="sm"
-            variant="danger"
-            onClick={() => {
-              clearQueue();
-              removeQueueWidget();
-            }}
-          >
-            Stop
-          </Button>
-        </div>
-      </div>,
-      widget
-    );
-  } catch (e) {
-    console.error("[SubtitleMarkers] Failed to update the queue widget:", e);
-    removeQueueWidget();
-  }
-}
-
-new MutationObserver(ensureQueueWidget).observe(document.body, { childList: true, subtree: true });
-// Covers the page already being on the right scene when this script first runs - which is
-// exactly how this plugin advances between different scenes (a real navigation, not an SPA
-// route change), so this is reached on every cross-scene queue advance, not just a fresh load.
-ensureQueueWidget();
 
 // ---------------------------------------------------------------------
 // "Play All (Filtered)" - the same queue, started from Stash's own native Markers list (and
@@ -794,8 +539,8 @@ ensureQueueWidget();
 // ---------------------------------------------------------------------
 
 // A generous cap, not a real limit on how many markers can match a filter - queueing
-// everything beyond this would make for an unreasonably large sessionStorage payload and an
-// hours-long queue; this is already far more than "Play Random"'s own per-page query size.
+// everything beyond this would make for an unreasonably long queue to sit through; this is
+// already far more than "Play Random"'s own per-page query size.
 const MAX_QUEUE_MARKERS = 1000;
 
 async function playAllFilteredMarkers(result: any, filter: any, filterHook?: (f: any) => any) {
@@ -806,11 +551,11 @@ async function playAllFilteredMarkers(result: any, filter: any, filterHook?: (f:
     filterCopy.itemsPerPage = MAX_QUEUE_MARKERS;
     const queryResult = await queryFindSceneMarkers(filterCopy);
     const markers = queryResult.data?.findSceneMarkers?.scene_markers ?? [];
-    const items: SearchResult[] = markers.map((m: any) => ({
+    // Just {sceneId, seconds} - the native queue/Queue tab fetches and shows each scene's own
+    // title/thumbnail/etc. itself, so there's no need to work out a title/text here too.
+    const items: QueueItem[] = markers.map((m: any) => ({
       sceneId: m.scene.id,
-      sceneTitle: m.scene.title || `Scene ${m.scene.id}`,
       seconds: m.seconds,
-      text: m.title || m.primary_tag?.name || "",
     }));
     startQueue(items);
   } catch (e) {
