@@ -578,10 +578,18 @@ async function run() {
   console.log('X2) no Subtitles pane is added for a scene with no captions:', tabContentResultNoCaptions[0] === tabContentPropsNoCaptions);
 
   // A mock .video-js video + TextTrack, standing in for the real player - jsdom doesn't
-  // implement addTextTrack()/VTTCue, so textTracks is overridden directly with plain mock
-  // track objects exposing the same shape findCaptionTrack/the panel's effects actually read
+  // implement addTextTrack()/VTTCue, so tracks are supplied directly as plain mock objects
+  // exposing the same shape findCaptionTrack/the panel's effects actually read
   // (kind/language/mode/cues/addEventListener), and plain {startTime,endTime,text} cues (the
   // panel only ever reads/mutates those 3 fields on a real VTTCue, never constructs one).
+  //
+  // Deliberately reached via video.player.textTracks() (a plain fn returning the array), not
+  // video.textTracks directly - video.js only puts tracks on the native DOM property when
+  // using *native* text track support (Safari/iOS only); everywhere else (Chrome, Firefox -
+  // what real users actually hit "couldn't find the subtitle track" on) it emulates its own
+  // TextTrackList on the Player instance, which video.js stamps onto the <video> tag as
+  // `.player`. video.textTracks is left as whatever jsdom's bare default is (never populated),
+  // so this also doubles as the regression test for that exact real-world bug.
   function makeMockCue(start, end, text) {
     return { startTime: start, endTime: end, text };
   }
@@ -598,9 +606,12 @@ async function run() {
       },
       _setCues(cues) {
         this.cues = cues;
-        (listeners.load || []).slice().forEach((fn) => fn());
+        (listeners.loadeddata || []).slice().forEach((fn) => fn());
       },
     };
+  }
+  function setMockPlayerTracks(video, tracks) {
+    video.player = { textTracks: () => tracks };
   }
 
   const videoJsEl = document.createElement('div');
@@ -613,7 +624,11 @@ async function run() {
     makeMockCue(10, 12, '<i>Hello</i> there'),
     makeMockCue(50, 52, 'World'),
   ]);
-  Object.defineProperty(mockVideo, 'textTracks', { value: [enTrack], configurable: true });
+  setMockPlayerTracks(mockVideo, [enTrack]);
+  console.log(
+    'W2) the mock video\'s own native textTracks has nothing on it (the real Chrome/Firefox case - emulated tracks live on .player, not the DOM element) yet the track is still found:',
+    (mockVideo.textTracks == null || mockVideo.textTracks.length === 0)
+  );
 
   const subtitleScene = {
     id: '42',
@@ -698,7 +713,7 @@ async function run() {
     window.localStorage.setItem('subtitleMarkersOffset:42:en:srt', '2');
   } catch {}
   const enTrack2 = makeMockTrack('captions', 'en', [makeMockCue(10, 12, 'Hello there'), makeMockCue(50, 52, 'World')]);
-  Object.defineProperty(mockVideo, 'textTracks', { value: [enTrack2], configurable: true });
+  setMockPlayerTracks(mockVideo, [enTrack2]);
 
   const tabContentResult2 = window.__scenePageTabContentBeforeFn({ scene: subtitleScene, setTimestamp: setTimestampSpy, children: [] })[0];
   const subContainer2 = document.createElement('div');
@@ -720,7 +735,7 @@ async function run() {
   try { window.localStorage.removeItem('subtitleMarkersOffset:42:pt:srt'); } catch {}
   const ptTrack = makeMockTrack('captions', 'pt', [makeMockCue(5, 7, 'Ola mundo')]);
   const enTrack3 = makeMockTrack('captions', 'en', [makeMockCue(10, 12, 'Hello there')]);
-  Object.defineProperty(mockVideo, 'textTracks', { value: [enTrack3, ptTrack], configurable: true });
+  setMockPlayerTracks(mockVideo, [enTrack3, ptTrack]);
 
   const multiScene = {
     id: '42',
@@ -752,7 +767,7 @@ async function run() {
   // something forces the browser to actually fetch/parse the VTT) shows a loading state, then
   // picks the cues up once the browser's own "load" event fires - not a fixed poll alone.
   const lazyTrack = makeMockTrack('captions', 'en', null);
-  Object.defineProperty(mockVideo, 'textTracks', { value: [lazyTrack], configurable: true });
+  setMockPlayerTracks(mockVideo, [lazyTrack]);
   const lazyScene = { id: '77', captions: [{ language_code: 'en', caption_type: 'vtt' }], paths: { caption: '/scene/77/caption' } };
   const lazyTabContentResult = window.__scenePageTabContentBeforeFn({ scene: lazyScene, setTimestamp: setTimestampSpy, children: [] })[0];
   const subContainer4 = document.createElement('div');

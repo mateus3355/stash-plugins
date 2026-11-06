@@ -616,14 +616,22 @@ function stripVttTags(text: string): string {
   return text.replace(/<[^>]*>/g, "").replace(/\s+/g, " ").trim();
 }
 
-// The real <video>'s native text tracks include whatever the player itself added (captions)
-// plus anything else (chapters, etc.) - narrowed to a captions/subtitles track, preferring
-// one whose language matches, falling back to the first of that kind found.
+// video.js only puts a caption track on the real <video> element's own native textTracks
+// when it's using *native* text track support, which (per Html5.supportsNativeTextTracks)
+// is Safari/iOS only - everywhere else (Chrome, Firefox, ...) it emulates TextTrack/
+// TextTrackList itself, and that emulated list lives on the video.js Player instance, not
+// the DOM element. video.js stamps the player straight onto both the .video-js wrapper and
+// the inner <video> tag it creates (Player.prototype.createEl: `tag.player = el.player =
+// this`) as soon as the player is constructed, so `video.player.textTracks()` reaches the
+// right list either way - video.js mirrors native tracks into the same list too (see
+// proxyNativeTracksForType_), so there's no native/emulated branch to handle here at all.
 function findCaptionTrack(
   video: HTMLVideoElement,
   languageCode?: string
 ): TextTrack | null {
-  const tracks = video.textTracks;
+  const player = (video as any).player;
+  const tracks = player ? player.textTracks() : null;
+  if (!tracks) return null;
   let fallback: TextTrack | null = null;
   for (let i = 0; i < tracks.length; i++) {
     const track = tracks[i];
@@ -733,9 +741,12 @@ function SubtitlesTabPanel({
       if (track.cues && track.cues.length > 0) {
         onCuesReady();
       } else {
-        track.addEventListener("load", onCuesReady, { once: true });
+        // "loadeddata" (not "load" - that fires on a separate wrapper element video.js/the
+        // browser use internally, never on the TextTrack object itself) is what the TextTrack
+        // actually dispatches once its cues are parsed.
+        track.addEventListener("loadeddata", onCuesReady, { once: true });
         // Some browsers populate .cues for an already-cached response without ever firing
-        // "load" again - a short poll covers that case too.
+        // that event again - a short poll covers that case too.
         setTimeout(onCuesReady, 300);
       }
     }
