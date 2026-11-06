@@ -4,6 +4,7 @@ import { ToastProvider } from "src/hooks/Toast";
 import { TagIDSelect } from "src/components/Tags/TagSelect";
 import { FolderSelect } from "src/components/Shared/FolderSelect/FolderSelect";
 import { SceneCard } from "src/components/Scenes/SceneCard";
+import { TruncatedText } from "src/components/Shared/TruncatedText";
 import { useCardWidth, useContainerDimensions } from "src/components/Shared/GridCard/GridCard";
 import { queryFindSceneMarkers, queryFindScenesByID } from "src/core/StashService";
 import TextUtils from "src/utils/text";
@@ -314,11 +315,15 @@ function SubtitleMarkersPage({ libraryPaths }: { libraryPaths: string[] }) {
               // above failed) - fall back to the plain link rather than silently dropping it.
               if (!scene) {
                 return (
-                  <div key={i} className="subtitle-markers-result subtitle-markers-result-fallback">
+                  <div
+                    key={i}
+                    className="subtitle-markers-result subtitle-markers-result-fallback"
+                    style={cardWidth ? { width: cardWidth } : undefined}
+                  >
                     <a href={`/scenes/${r.sceneId}?t=${r.seconds}`} target="_blank" rel="noreferrer">
                       {r.sceneTitle || `Scene ${r.sceneId}`} @ {TextUtils.secondsToTimestamp(r.seconds)}
                     </a>
-                    <div className="text-muted subtitle-markers-result-text">{r.text}</div>
+                    <TruncatedText className="text-muted subtitle-markers-result-text" text={r.text} lineCount={2} />
                   </div>
                 );
               }
@@ -326,12 +331,20 @@ function SubtitleMarkersPage({ libraryPaths }: { libraryPaths: string[] }) {
                 <div
                   key={i}
                   className="subtitle-markers-result-card"
+                  // Without an explicit width here, a long matched line (no natural
+                  // wrapping point of its own) stretches this whole column wider than the
+                  // SceneCard above it instead of wrapping within it - matching the card's
+                  // own width (same cardWidth passed to SceneCard below) forces it to wrap
+                  // there instead, and TruncatedText then clamps it to 2 lines.
+                  style={cardWidth ? { width: cardWidth } : undefined}
                   onClickCapture={(e: any) => handleResultCardClickCapture(e, r)}
                 >
                   <SceneCard scene={scene} width={cardWidth} />
-                  <div className="text-muted subtitle-markers-result-text">
-                    @ {TextUtils.secondsToTimestamp(r.seconds)} — {r.text}
-                  </div>
+                  <TruncatedText
+                    className="text-muted subtitle-markers-result-text"
+                    text={`@ ${TextUtils.secondsToTimestamp(r.seconds)} — ${r.text}`}
+                    lineCount={2}
+                  />
                 </div>
               );
             })}

@@ -431,6 +431,14 @@ async function run() {
   console.log('S3) it shows the scene\'s real tags, not just the matched subtitle text:', !!container.querySelector('.tag-count') && container.textContent.includes('knock knock'));
   console.log('S4) the matched subtitle text/timestamp is still shown alongside the card:', resultCards[0].textContent.includes('Someone said knock knock'));
 
+  // Regression: a long matched line, with no explicit width constraint of its own, used to
+  // stretch this whole column wider than the SceneCard above it instead of wrapping - fixed
+  // by giving the wrapper the same cardWidth the SceneCard itself uses, and clamping the
+  // caption to 2 lines (TruncatedText) rather than one unbroken line of arbitrary length.
+  console.log('S8) the card wrapper is given an explicit width, matching the card\'s own:', resultCards[0].style.width === '340px');
+  const captionEl = resultCards[0].querySelector('.subtitle-markers-result-text');
+  console.log('S9) the caption text is clamped (TruncatedText), not left to grow unbounded:', captionEl.classList.contains('TruncatedText') && captionEl.style.webkitLineClamp === '2');
+
   // GridCard renders both the thumbnail and the title as a <Link> to the plain scene URL
   // (/scenes/1, no timestamp) - clicking either must still land on *this* result's own
   // timestamp instead, not the scene generally.
