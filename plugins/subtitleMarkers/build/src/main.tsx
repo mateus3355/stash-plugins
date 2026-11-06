@@ -620,16 +620,19 @@ function stripVttTags(text: string): string {
 // when it's using *native* text track support, which (per Html5.supportsNativeTextTracks)
 // is Safari/iOS only - everywhere else (Chrome, Firefox, ...) it emulates TextTrack/
 // TextTrackList itself, and that emulated list lives on the video.js Player instance, not
-// the DOM element. video.js stamps the player straight onto both the .video-js wrapper and
-// the inner <video> tag it creates (Player.prototype.createEl: `tag.player = el.player =
-// this`) as soon as the player is constructed, so `video.player.textTracks()` reaches the
-// right list either way - video.js mirrors native tracks into the same list too (see
-// proxyNativeTracksForType_), so there's no native/emulated branch to handle here at all.
+// the DOM element. The Player instance itself is stamped as `.player` on the *.video-js*
+// wrapper element (Player.prototype.createEl: `tag.player = el.player = this`) - NOT
+// reliably on the inner <video> tag itself: the Html5 tech's own createEl (which runs right
+// after) clones that original tag via cloneNode() to work around a Safari/iOS quirk
+// (`movingMediaElementInDOM`), and cloneNode() never copies custom JS properties like
+// `.player` - so the <video> element actually left in the DOM has lost it, even though the
+// wrapper's own `.player` is unaffected (confirmed directly against a real deployment: the
+// <video> tag's `.player` was undefined, the `.video-js` wrapper's was the real Player).
 function findCaptionTrack(
-  video: HTMLVideoElement,
+  videoJsEl: Element,
   languageCode?: string
 ): TextTrack | null {
-  const player = (video as any).player;
+  const player = (videoJsEl as any).player;
   const tracks = player ? player.textTracks() : null;
   if (!tracks) return null;
   let fallback: TextTrack | null = null;
@@ -703,8 +706,8 @@ function SubtitlesTabPanel({
 
     function tryFind() {
       if (cancelled) return;
-      const video = document.querySelector<HTMLVideoElement>(".video-js video");
-      const track = video ? findCaptionTrack(video, selected.language_code) : null;
+      const videoJsEl = document.querySelector(".video-js");
+      const track = videoJsEl ? findCaptionTrack(videoJsEl, selected.language_code) : null;
       if (!track) {
         attempts++;
         if (attempts > 40) {

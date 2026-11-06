@@ -577,19 +577,20 @@ async function run() {
   const tabContentResultNoCaptions = window.__scenePageTabContentBeforeFn(tabContentPropsNoCaptions);
   console.log('X2) no Subtitles pane is added for a scene with no captions:', tabContentResultNoCaptions[0] === tabContentPropsNoCaptions);
 
-  // A mock .video-js video + TextTrack, standing in for the real player - jsdom doesn't
-  // implement addTextTrack()/VTTCue, so tracks are supplied directly as plain mock objects
-  // exposing the same shape findCaptionTrack/the panel's effects actually read
+  // A mock .video-js wrapper + inner <video> + TextTrack, standing in for the real player -
+  // jsdom doesn't implement addTextTrack()/VTTCue, so tracks are supplied directly as plain
+  // mock objects exposing the same shape findCaptionTrack/the panel's effects actually read
   // (kind/language/mode/cues/addEventListener), and plain {startTime,endTime,text} cues (the
   // panel only ever reads/mutates those 3 fields on a real VTTCue, never constructs one).
   //
-  // Deliberately reached via video.player.textTracks() (a plain fn returning the array), not
-  // video.textTracks directly - video.js only puts tracks on the native DOM property when
-  // using *native* text track support (Safari/iOS only); everywhere else (Chrome, Firefox -
-  // what real users actually hit "couldn't find the subtitle track" on) it emulates its own
-  // TextTrackList on the Player instance, which video.js stamps onto the <video> tag as
-  // `.player`. video.textTracks is left as whatever jsdom's bare default is (never populated),
-  // so this also doubles as the regression test for that exact real-world bug.
+  // Deliberately reached via the *.video-js wrapper's* own .player.textTracks(), never the
+  // inner <video> tag's - confirmed against a real deployment that video.js's Html5 tech
+  // clones the original tag via cloneNode() (a workaround for a Safari/iOS quirk), and
+  // cloneNode() never copies custom JS properties like `.player`, so the <video> element
+  // actually left in the DOM has lost it even though the wrapper's own `.player` (set once,
+  // never replaced) is unaffected - this mock leaves the inner <video> with no `.player` at
+  // all, the same as a real page, so this also doubles as the regression test for that exact
+  // real-world bug.
   function makeMockCue(start, end, text) {
     return { startTime: start, endTime: end, text };
   }
@@ -610,8 +611,8 @@ async function run() {
       },
     };
   }
-  function setMockPlayerTracks(video, tracks) {
-    video.player = { textTracks: () => tracks };
+  function setMockPlayerTracks(videoJs, tracks) {
+    videoJs.player = { textTracks: () => tracks };
   }
 
   const videoJsEl = document.createElement('div');
@@ -624,10 +625,10 @@ async function run() {
     makeMockCue(10, 12, '<i>Hello</i> there'),
     makeMockCue(50, 52, 'World'),
   ]);
-  setMockPlayerTracks(mockVideo, [enTrack]);
+  setMockPlayerTracks(videoJsEl, [enTrack]);
   console.log(
-    'W2) the mock video\'s own native textTracks has nothing on it (the real Chrome/Firefox case - emulated tracks live on .player, not the DOM element) yet the track is still found:',
-    (mockVideo.textTracks == null || mockVideo.textTracks.length === 0)
+    'W2) the mock inner <video> tag has no .player of its own (the real cloneNode() case) yet the track is still found via the .video-js wrapper:',
+    mockVideo.player === undefined
   );
 
   const subtitleScene = {
@@ -713,7 +714,7 @@ async function run() {
     window.localStorage.setItem('subtitleMarkersOffset:42:en:srt', '2');
   } catch {}
   const enTrack2 = makeMockTrack('captions', 'en', [makeMockCue(10, 12, 'Hello there'), makeMockCue(50, 52, 'World')]);
-  setMockPlayerTracks(mockVideo, [enTrack2]);
+  setMockPlayerTracks(videoJsEl, [enTrack2]);
 
   const tabContentResult2 = window.__scenePageTabContentBeforeFn({ scene: subtitleScene, setTimestamp: setTimestampSpy, children: [] })[0];
   const subContainer2 = document.createElement('div');
@@ -735,7 +736,7 @@ async function run() {
   try { window.localStorage.removeItem('subtitleMarkersOffset:42:pt:srt'); } catch {}
   const ptTrack = makeMockTrack('captions', 'pt', [makeMockCue(5, 7, 'Ola mundo')]);
   const enTrack3 = makeMockTrack('captions', 'en', [makeMockCue(10, 12, 'Hello there')]);
-  setMockPlayerTracks(mockVideo, [enTrack3, ptTrack]);
+  setMockPlayerTracks(videoJsEl, [enTrack3, ptTrack]);
 
   const multiScene = {
     id: '42',
@@ -767,7 +768,7 @@ async function run() {
   // something forces the browser to actually fetch/parse the VTT) shows a loading state, then
   // picks the cues up once the browser's own "load" event fires - not a fixed poll alone.
   const lazyTrack = makeMockTrack('captions', 'en', null);
-  setMockPlayerTracks(mockVideo, [lazyTrack]);
+  setMockPlayerTracks(videoJsEl, [lazyTrack]);
   const lazyScene = { id: '77', captions: [{ language_code: 'en', caption_type: 'vtt' }], paths: { caption: '/scene/77/caption' } };
   const lazyTabContentResult = window.__scenePageTabContentBeforeFn({ scene: lazyScene, setTimestamp: setTimestampSpy, children: [] })[0];
   const subContainer4 = document.createElement('div');
