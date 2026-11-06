@@ -287,11 +287,13 @@ async function run() {
 
   // The queue is now a real native SceneQueue link - built straight from the query response
   // (2 markers, 2 different scenes) and opened in exactly one new tab, with both entries'
-  // own scene id/start time encoded (qs=1:30, qs=3:90), not just the first.
+  // own scene id/start time encoded (qs=1&qs=3, qt=30&qt=90, aligned by position), not just
+  // the first - split into two parallel lists rather than qs=1:30 so anything parsing qs= as
+  // a plain id list on its own (e.g. Stash TV's "open in Stash TV" button) still works.
   console.log('C10) it opens exactly one new tab (not one per marker):', openCalls.length === 1);
   console.log(
     'C13) it\'s a real native SceneQueue link with both markers\' own scene/time entries:',
-    openCalls[0] === '/scenes/1?qs=1:30&qs=3:90&qi=0&autoplay=true&continue=true&t=30'
+    openCalls[0] === '/scenes/1?qs=1&qs=3&qt=30&qt=90&qi=0&autoplay=true&continue=true&t=30'
   );
 
   // --- A page's own filterHook (e.g. a Tag's "Markers" tab, constraining to that tag) is
@@ -472,8 +474,8 @@ async function run() {
 
   TestUtils.Simulate.click(playAllButton);
   console.log(
-    'V) clicking it opens a real native SceneQueue link (per-entry qs=<id>:<t>, qi=0) in a new tab:',
-    queueOpenCalls.length === 1 && queueOpenCalls[0] === '/scenes/1?qs=1:12.5&qs=1:40&qs=2:5&qi=0&autoplay=true&continue=true&t=12.5'
+    'V) clicking it opens a real native SceneQueue link (split qs=/qt= lists, qi=0) in a new tab:',
+    queueOpenCalls.length === 1 && queueOpenCalls[0] === '/scenes/1?qs=1&qs=1&qs=2&qt=12.5&qt=40&qt=5&qi=0&autoplay=true&continue=true&t=12.5'
   );
   window.open = realOpenForQueue;
 
