@@ -206,6 +206,8 @@ async function run() {
       before: (name, fn) => {
         if (name === 'MainNavBar.MenuItems') window.__navBeforeFn = fn;
         if (name === 'FilteredSceneMarkerList') window.__filteredSceneMarkerListBeforeFn = fn;
+        if (name === 'ScenePage.Tabs') window.__scenePageTabsBeforeFn = fn;
+        if (name === 'ScenePage.TabContent') window.__scenePageTabContentBeforeFn = fn;
       },
     },
   };
@@ -552,6 +554,224 @@ async function run() {
     await new Promise((r) => setTimeout(r, 20));
   });
   console.log('O) a failed run shows the error instead of crashing:', container.textContent.includes('plugin is disabled'));
+
+  // ---------------------------------------------------------------------
+  // "Subtitles" tab on the scene player (ScenePage.Tabs/ScenePage.TabContent) - exercised
+  // directly against the captured before() hooks, with a real (mocked) <video>/TextTrack so
+  // the cue list, click-to-seek and sync-offset mutation are all checked against the exact
+  // objects the real player's native captions render from, not a parallel re-implementation.
+  // ---------------------------------------------------------------------
+
+  console.log('W) "ScenePage.Tabs"/"ScenePage.TabContent" patches registered:',
+    typeof window.__scenePageTabsBeforeFn === 'function' && typeof window.__scenePageTabContentBeforeFn === 'function');
+
+  const SUBTITLES_TAB_KEY = 'subtitle-markers-subtitles-tab';
+
+  // A scene with no caption track at all - both patches must leave props completely
+  // untouched (same reference back), not just "no visible change".
+  const noCaptionScene = { id: '99', captions: [], paths: { caption: null } };
+  const tabsPropsNoCaptions = { scene: noCaptionScene, children: [React.createElement('span', { key: 'x' }, 'x')] };
+  const tabsResultNoCaptions = window.__scenePageTabsBeforeFn(tabsPropsNoCaptions);
+  console.log('X) no Subtitles nav tab is added for a scene with no captions:', tabsResultNoCaptions[0] === tabsPropsNoCaptions);
+  const tabContentPropsNoCaptions = { scene: noCaptionScene, children: [React.createElement('span', { key: 'x' }, 'x')] };
+  const tabContentResultNoCaptions = window.__scenePageTabContentBeforeFn(tabContentPropsNoCaptions);
+  console.log('X2) no Subtitles pane is added for a scene with no captions:', tabContentResultNoCaptions[0] === tabContentPropsNoCaptions);
+
+  // A mock .video-js video + TextTrack, standing in for the real player - jsdom doesn't
+  // implement addTextTrack()/VTTCue, so textTracks is overridden directly with plain mock
+  // track objects exposing the same shape findCaptionTrack/the panel's effects actually read
+  // (kind/language/mode/cues/addEventListener), and plain {startTime,endTime,text} cues (the
+  // panel only ever reads/mutates those 3 fields on a real VTTCue, never constructs one).
+  function makeMockCue(start, end, text) {
+    return { startTime: start, endTime: end, text };
+  }
+  function makeMockTrack(kind, language, initialCues) {
+    const listeners = {};
+    return {
+      kind,
+      language,
+      mode: 'disabled',
+      cues: initialCues || null,
+      addEventListener(ev, fn) { (listeners[ev] = listeners[ev] || []).push(fn); },
+      removeEventListener(ev, fn) {
+        if (listeners[ev]) listeners[ev] = listeners[ev].filter((f) => f !== fn);
+      },
+      _setCues(cues) {
+        this.cues = cues;
+        (listeners.load || []).slice().forEach((fn) => fn());
+      },
+    };
+  }
+
+  const videoJsEl = document.createElement('div');
+  videoJsEl.className = 'video-js';
+  const mockVideo = document.createElement('video');
+  videoJsEl.appendChild(mockVideo);
+  document.body.appendChild(videoJsEl);
+
+  const enTrack = makeMockTrack('captions', 'en', [
+    makeMockCue(10, 12, '<i>Hello</i> there'),
+    makeMockCue(50, 52, 'World'),
+  ]);
+  Object.defineProperty(mockVideo, 'textTracks', { value: [enTrack], configurable: true });
+
+  const subtitleScene = {
+    id: '42',
+    captions: [{ language_code: 'en', caption_type: 'srt' }],
+    paths: { caption: '/scene/42/caption' },
+  };
+  const setTimestampCalls = [];
+  const setTimestampSpy = (value, autoPlay) => setTimestampCalls.push({ value, autoPlay });
+
+  const existingNavItem = React.createElement(ReactBootstrap.Nav.Item, { key: 'existing-nav' }, React.createElement(ReactBootstrap.Nav.Link, { eventKey: 'details' }, 'Details'));
+  const existingPane = React.createElement(ReactBootstrap.Tab.Pane, { key: 'existing-pane', eventKey: 'details' }, 'Details content');
+
+  const tabsProps = { scene: subtitleScene, children: [existingNavItem] };
+  const tabsResult = window.__scenePageTabsBeforeFn(tabsProps)[0];
+  const tabContentProps = { scene: subtitleScene, setTimestamp: setTimestampSpy, children: [existingPane] };
+  const tabContentResult = window.__scenePageTabContentBeforeFn(tabContentProps)[0];
+
+  console.log('Y) a real captioned scene keeps the existing nav tab(s), adding a new one:', React.Children.toArray(tabsResult.children).length === 2);
+  console.log('Y2) a real captioned scene keeps the existing pane(s), adding a new one:', React.Children.toArray(tabContentResult.children).length === 2);
+
+  const subContainer = document.createElement('div');
+  document.body.appendChild(subContainer);
+
+  await TestUtils.act(async () => {
+    ReactDOM.render(
+      React.createElement(
+        ReactBootstrap.Tab.Container,
+        { activeKey: SUBTITLES_TAB_KEY },
+        React.createElement(ReactBootstrap.Nav, null, tabsResult.children),
+        React.createElement(ReactBootstrap.Tab.Content, null, tabContentResult.children)
+      ),
+      subContainer
+    );
+    await new Promise((r) => setTimeout(r, 20));
+  });
+
+  console.log('Z) the new nav link is labeled "Subtitles":', Array.from(subContainer.querySelectorAll('.nav-link')).some((a) => a.textContent === 'Subtitles'));
+  console.log('Z1) the panel renders the real track\'s cues, VTT tags stripped:', subContainer.textContent.includes('Hello there') && !subContainer.textContent.includes('<i>'));
+  console.log('Z2) each cue shows its formatted start timestamp:', subContainer.textContent.includes('0:10') && subContainer.textContent.includes('0:50'));
+  console.log('Z3) the (previously disabled) track was switched to "hidden" so the browser actually loads it:', enTrack.mode === 'hidden');
+  console.log('Z4) a single caption track shows no language selector:', !subContainer.querySelector('select'));
+
+  // Clicking a cue seeks the real player, autoplaying through the jump (continuing the same
+  // way a queue advance does), not just scrolling a list.
+  const cueEls = Array.from(subContainer.querySelectorAll('.subtitle-markers-subtitles-cue'));
+  console.log('Z5) one list entry per real cue:', cueEls.length === 2);
+  setTimestampCalls.length = 0;
+  await TestUtils.act(async () => {
+    TestUtils.Simulate.click(cueEls[1]);
+  });
+  console.log('AA) clicking a cue seeks+autoplays to its exact (un-offset) start time:', setTimestampCalls.length === 1 && setTimestampCalls[0].value === 50 && setTimestampCalls[0].autoPlay === true);
+
+  // The sync offset actually mutates the real cue objects the player renders from - not just
+  // what this list displays - and persists per scene+language+type.
+  const minusOneButton = Array.from(subContainer.querySelectorAll('button')).find((b) => b.textContent === '-1s');
+  await TestUtils.act(async () => {
+    TestUtils.Simulate.click(minusOneButton);
+  });
+  console.log('AB) "-1s" mutates the real cue\'s startTime/endTime (not just a display value):', enTrack.cues[0].startTime === 9 && enTrack.cues[0].endTime === 11);
+  console.log('AC) ...leaving the other real cue shifted the same way:', enTrack.cues[1].startTime === 49);
+  console.log('AD) the list itself reflects the shifted time too:', subContainer.textContent.includes('0:09'));
+
+  let storedOffset = null;
+  try {
+    storedOffset = window.localStorage.getItem('subtitleMarkersOffset:42:en:srt');
+  } catch {}
+  console.log('AE) the offset is persisted to localStorage under a scene+language+type key:', storedOffset === '-1');
+
+  const resetButton = Array.from(subContainer.querySelectorAll('button')).find((b) => b.textContent === 'Reset');
+  console.log('AF) a "Reset" control appears once the offset is non-zero:', !!resetButton);
+  await TestUtils.act(async () => {
+    TestUtils.Simulate.click(resetButton);
+  });
+  console.log('AG) "Reset" puts the real cue back to its original, un-offset time:', enTrack.cues[0].startTime === 10);
+
+  ReactDOM.unmountComponentAtNode(subContainer);
+  subContainer.remove();
+
+  // Reopening the same scene (a fresh mount) picks the persisted offset back up and applies
+  // it to the (freshly-created) track's cues immediately, with no further clicks.
+  try {
+    window.localStorage.setItem('subtitleMarkersOffset:42:en:srt', '2');
+  } catch {}
+  const enTrack2 = makeMockTrack('captions', 'en', [makeMockCue(10, 12, 'Hello there'), makeMockCue(50, 52, 'World')]);
+  Object.defineProperty(mockVideo, 'textTracks', { value: [enTrack2], configurable: true });
+
+  const tabContentResult2 = window.__scenePageTabContentBeforeFn({ scene: subtitleScene, setTimestamp: setTimestampSpy, children: [] })[0];
+  const subContainer2 = document.createElement('div');
+  document.body.appendChild(subContainer2);
+  await TestUtils.act(async () => {
+    ReactDOM.render(
+      React.createElement(ReactBootstrap.Tab.Container, { activeKey: SUBTITLES_TAB_KEY }, React.createElement(ReactBootstrap.Tab.Content, null, tabContentResult2.children)),
+      subContainer2
+    );
+    await new Promise((r) => setTimeout(r, 20));
+  });
+  console.log('AH) reopening the scene re-applies the remembered offset to the real cues automatically:', enTrack2.cues[0].startTime === 12 && enTrack2.cues[1].startTime === 52);
+  ReactDOM.unmountComponentAtNode(subContainer2);
+  subContainer2.remove();
+
+  // A scene with more than one caption track shows a language picker, and switching it swaps
+  // which real TextTrack's cues are shown.
+  try { window.localStorage.removeItem('subtitleMarkersOffset:42:en:srt'); } catch {}
+  try { window.localStorage.removeItem('subtitleMarkersOffset:42:pt:srt'); } catch {}
+  const ptTrack = makeMockTrack('captions', 'pt', [makeMockCue(5, 7, 'Ola mundo')]);
+  const enTrack3 = makeMockTrack('captions', 'en', [makeMockCue(10, 12, 'Hello there')]);
+  Object.defineProperty(mockVideo, 'textTracks', { value: [enTrack3, ptTrack], configurable: true });
+
+  const multiScene = {
+    id: '42',
+    captions: [{ language_code: 'en', caption_type: 'srt' }, { language_code: 'pt', caption_type: 'srt' }],
+    paths: { caption: '/scene/42/caption' },
+  };
+  const multiTabContentResult = window.__scenePageTabContentBeforeFn({ scene: multiScene, setTimestamp: setTimestampSpy, children: [] })[0];
+  const subContainer3 = document.createElement('div');
+  document.body.appendChild(subContainer3);
+  await TestUtils.act(async () => {
+    ReactDOM.render(
+      React.createElement(ReactBootstrap.Tab.Container, { activeKey: SUBTITLES_TAB_KEY }, React.createElement(ReactBootstrap.Tab.Content, null, multiTabContentResult.children)),
+      subContainer3
+    );
+    await new Promise((r) => setTimeout(r, 20));
+  });
+  const langSelect = subContainer3.querySelector('select');
+  console.log('AI) two caption tracks show a language selector:', !!langSelect && langSelect.options.length === 2);
+  console.log('AJ) it defaults to the first language\'s real cues:', subContainer3.textContent.includes('Hello there') && !subContainer3.textContent.includes('Ola mundo'));
+  await TestUtils.act(async () => {
+    TestUtils.Simulate.change(langSelect, { target: { value: '1' } });
+    await new Promise((r) => setTimeout(r, 20));
+  });
+  console.log('AK) switching language swaps to that real track\'s own cues:', subContainer3.textContent.includes('Ola mundo') && !subContainer3.textContent.includes('Hello there'));
+  ReactDOM.unmountComponentAtNode(subContainer3);
+  subContainer3.remove();
+
+  // A track whose cues aren't loaded yet (the common real-player case - cues are empty until
+  // something forces the browser to actually fetch/parse the VTT) shows a loading state, then
+  // picks the cues up once the browser's own "load" event fires - not a fixed poll alone.
+  const lazyTrack = makeMockTrack('captions', 'en', null);
+  Object.defineProperty(mockVideo, 'textTracks', { value: [lazyTrack], configurable: true });
+  const lazyScene = { id: '77', captions: [{ language_code: 'en', caption_type: 'vtt' }], paths: { caption: '/scene/77/caption' } };
+  const lazyTabContentResult = window.__scenePageTabContentBeforeFn({ scene: lazyScene, setTimestamp: setTimestampSpy, children: [] })[0];
+  const subContainer4 = document.createElement('div');
+  document.body.appendChild(subContainer4);
+  await TestUtils.act(async () => {
+    ReactDOM.render(
+      React.createElement(ReactBootstrap.Tab.Container, { activeKey: SUBTITLES_TAB_KEY }, React.createElement(ReactBootstrap.Tab.Content, null, lazyTabContentResult.children)),
+      subContainer4
+    );
+    await new Promise((r) => setTimeout(r, 20));
+  });
+  console.log('AL) a track with no cues loaded yet shows a loading state instead of "no cues":', subContainer4.textContent.includes('Loading subtitles'));
+  await TestUtils.act(async () => {
+    lazyTrack._setCues([makeMockCue(3, 4, 'Just loaded')]);
+    await new Promise((r) => setTimeout(r, 20));
+  });
+  console.log('AM) once the track\'s "load" event fires, its cues appear:', subContainer4.textContent.includes('Just loaded'));
+  ReactDOM.unmountComponentAtNode(subContainer4);
+  subContainer4.remove();
 }
 
 run().then(() => process.exit(0)).catch((e) => { console.error('FATAL', e); process.exit(1); });

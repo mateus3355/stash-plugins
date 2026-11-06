@@ -99,6 +99,20 @@ without watching the whole thing or editing scenes by hand one at a time.
   dropdown (`FilteredSceneMarkerList`, alongside "Play Random" etc.), not an
   injected one, so it plays through every marker matching whatever filter is
   currently applied there (not just the current page, up to 1000 markers).
+- **A "Subtitles" tab on the scene player**, next to Details/Queue/Markers/etc,
+  shown for any scene that has a caption track - a real tab (`ScenePage.Tabs`/
+  `ScenePage.TabContent`, alongside the native ones, not a separate page) listing
+  every cue in that subtitle, each clickable to jump (and start playing) right to
+  it. Multiple caption tracks on the same scene get a language picker. Also has
+  a **sync offset** (±1s/±0.1s buttons or typing a value directly) to delay or
+  advance the subtitles when they're out of sync with the video - this actually
+  shifts the captions shown during playback, not just the numbers in this list:
+  it reads the real `TextTrack`/cues the native player itself already loads
+  (found via the same `<video>` element the queue feature above also uses) and
+  mutates their `startTime`/`endTime` directly, so the list and whatever's
+  actually rendered as captions can never disagree. The offset is remembered
+  per scene + language + subtitle type (`localStorage`), so a file that's
+  consistently e.g. 2 seconds early only needs dialing in once.
 
 ## Two parts
 

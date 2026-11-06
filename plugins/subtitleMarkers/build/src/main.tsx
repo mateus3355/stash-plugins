@@ -25,7 +25,7 @@ const { PluginApi } = window;
 const { React } = PluginApi;
 const { useState, useEffect } = React;
 const Bootstrap = PluginApi.libraries.Bootstrap;
-const { Nav, Button, Form, Alert, ProgressBar, Spinner } = Bootstrap;
+const { Nav, Tab, Button, Form, Alert, ProgressBar, Spinner } = Bootstrap;
 const { NavLink } = PluginApi.libraries.ReactRouterDOM;
 const { FontAwesomeIcon } = PluginApi.libraries.ReactFontAwesome;
 const FA = PluginApi.libraries.FontAwesomeSolid;
@@ -582,6 +582,314 @@ PluginApi.patch.before("FilteredSceneMarkerList", (props: any) => {
     return [{ ...props, extraOperations: [...(props.extraOperations || []), playAllFilteredOperation] }];
   } catch (e) {
     console.error("[SubtitleMarkers] Failed to add the \"Play All (Filtered)\" operation:", e);
+    return [props];
+  }
+});
+
+// ---------------------------------------------------------------------
+// "Subtitles" tab on the scene player - lists every cue in the scene's own subtitle track,
+// each clickable to jump straight to it, with a delay/advance offset that actually shifts
+// the captions shown during playback (not just this list). ScenePage.Tabs/ScenePage.TabContent
+// (src/components/Scenes/SceneDetails/Scene.tsx) are real PatchComponents - Scene.tsx spreads
+// its own props (scene, setTimestamp) into both, so a before() patch on them gets those
+// directly, no DOM hacking needed for *that* part (unlike the player-page button/queue widget
+// elsewhere in this file, neither of which is a real PatchComponent).
+//
+// The cue list and the offset both work off the real TextTrack the native player itself
+// already loads (found via the same ".video-js video" the queue code above also uses), not a
+// second independent fetch+parse of the subtitle file - reading the actual cue objects the
+// browser renders captions from, and mutating their startTime/endTime directly, means this
+// list and whatever's actually on screen can never disagree with each other.
+// ---------------------------------------------------------------------
+
+const SUBTITLES_TAB_KEY = "subtitle-markers-subtitles-tab";
+
+function hasCaptions(scene: any): boolean {
+  return !!(scene?.paths?.caption && scene?.captions && scene.captions.length > 0);
+}
+
+// WebVTT cue text can carry <i>/<b>/<v Speaker> etc tags (the server converts whatever the
+// source subtitle format was - srt, ass, ... - into VTT, carrying over its own formatting) -
+// stripped here for plain-text display, same reasoning as strip_srt_formatting on the Python
+// side (subtitleMarkers.py), just VTT's tag syntax instead of SRT/ASS's.
+function stripVttTags(text: string): string {
+  return text.replace(/<[^>]*>/g, "").replace(/\s+/g, " ").trim();
+}
+
+// The real <video>'s native text tracks include whatever the player itself added (captions)
+// plus anything else (chapters, etc.) - narrowed to a captions/subtitles track, preferring
+// one whose language matches, falling back to the first of that kind found.
+function findCaptionTrack(
+  video: HTMLVideoElement,
+  languageCode?: string
+): TextTrack | null {
+  const tracks = video.textTracks;
+  let fallback: TextTrack | null = null;
+  for (let i = 0; i < tracks.length; i++) {
+    const track = tracks[i];
+    if (track.kind !== "captions" && track.kind !== "subtitles") continue;
+    if (!fallback) fallback = track;
+    if (languageCode && track.language === languageCode) return track;
+  }
+  return fallback;
+}
+
+interface CueInfo {
+  cue: VTTCue;
+  // The cue's own time before any offset was applied - every offset change is computed from
+  // this, never incrementally from the cue's current time, so repeated adjustments can't
+  // drift or compound.
+  originalStart: number;
+  originalEnd: number;
+}
+
+function offsetStorageKey(
+  sceneId: string,
+  languageCode: string,
+  captionType: string
+) {
+  return `subtitleMarkersOffset:${sceneId}:${languageCode}:${captionType}`;
+}
+
+function SubtitlesTabPanel({
+  scene,
+  setTimestamp,
+}: {
+  scene: any;
+  setTimestamp: (num: number, autoPlay?: boolean) => void;
+}) {
+  const captions: { language_code: string; caption_type: string }[] =
+    scene.captions || [];
+  const [selectedIndex, setSelectedIndex] = useState(0);
+  const selected = captions[selectedIndex];
+  const [cueInfos, setCueInfos] = useState<CueInfo[] | null>(null);
+  const [offset, setOffset] = useState(0);
+  const [error, setError] = useState<string | null>(null);
+
+  // Loads the offset remembered for this scene+caption as soon as we know which one is
+  // selected - a sync problem is usually a property of the file itself, so this is worth
+  // remembering rather than having to re-dial it in every time the scene is reopened.
+  useEffect(() => {
+    if (!selected) return;
+    try {
+      const raw = window.localStorage.getItem(
+        offsetStorageKey(scene.id, selected.language_code, selected.caption_type)
+      );
+      setOffset(raw ? Number(raw) || 0 : 0);
+    } catch {
+      setOffset(0);
+    }
+  }, [scene.id, selected?.language_code, selected?.caption_type]);
+
+  // Finds the real TextTrack and reads its cues - polls briefly since the player (and the
+  // track within it) may not have finished mounting yet when this tab first renders, and
+  // forces the track to actually load (its cues are empty until something does) without
+  // necessarily making it visible - this tab working shouldn't depend on the user having
+  // separately turned captions on via the player's own CC button.
+  useEffect(() => {
+    if (!selected) return;
+    setCueInfos(null);
+    setError(null);
+    let cancelled = false;
+    let attempts = 0;
+
+    function tryFind() {
+      if (cancelled) return;
+      const video = document.querySelector<HTMLVideoElement>(".video-js video");
+      const track = video ? findCaptionTrack(video, selected.language_code) : null;
+      if (!track) {
+        attempts++;
+        if (attempts > 40) {
+          setError("Couldn't find the subtitle track in the player - try reloading the page.");
+          return;
+        }
+        setTimeout(tryFind, 250);
+        return;
+      }
+      if (track.mode === "disabled") {
+        track.mode = "hidden";
+      }
+
+      function onCuesReady() {
+        if (cancelled) return;
+        const cues = track!.cues;
+        if (!cues || cues.length === 0) {
+          attempts++;
+          if (attempts > 40) {
+            setError("The subtitle track loaded but has no cues.");
+            return;
+          }
+          setTimeout(tryFind, 250);
+          return;
+        }
+        const infos: CueInfo[] = [];
+        for (let i = 0; i < cues.length; i++) {
+          const cue = cues[i] as VTTCue;
+          infos.push({ cue, originalStart: cue.startTime, originalEnd: cue.endTime });
+        }
+        setCueInfos(infos);
+      }
+
+      if (track.cues && track.cues.length > 0) {
+        onCuesReady();
+      } else {
+        track.addEventListener("load", onCuesReady, { once: true });
+        // Some browsers populate .cues for an already-cached response without ever firing
+        // "load" again - a short poll covers that case too.
+        setTimeout(onCuesReady, 300);
+      }
+    }
+    tryFind();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [scene.id, selected?.language_code, selected?.caption_type]);
+
+  // Applying the offset mutates the real cues directly - this is what actually shifts what's
+  // shown during playback, not just this list.
+  useEffect(() => {
+    if (!cueInfos) return;
+    for (const info of cueInfos) {
+      info.cue.startTime = Math.max(0, info.originalStart + offset);
+      info.cue.endTime = Math.max(0, info.originalEnd + offset);
+    }
+  }, [cueInfos, offset]);
+
+  function applyOffset(newOffset: number) {
+    const rounded = Math.round(newOffset * 10) / 10;
+    setOffset(rounded);
+    if (selected) {
+      try {
+        window.localStorage.setItem(
+          offsetStorageKey(scene.id, selected.language_code, selected.caption_type),
+          String(rounded)
+        );
+      } catch {
+        // localStorage can be unavailable (private browsing, quota) - the offset just won't
+        // persist across a reload, not a crash.
+      }
+    }
+  }
+
+  if (!selected) return null;
+
+  return (
+    <div className="subtitle-markers-subtitles-panel">
+      {captions.length > 1 && (
+        <Form.Group>
+          <Form.Label>Language</Form.Label>
+          <Form.Control
+            as="select"
+            value={selectedIndex}
+            onChange={(e: any) => setSelectedIndex(Number(e.target.value))}
+          >
+            {captions.map((c, i) => (
+              <option key={i} value={i}>
+                {c.language_code} ({c.caption_type})
+              </option>
+            ))}
+          </Form.Control>
+        </Form.Group>
+      )}
+
+      <div className="subtitle-markers-offset-controls d-flex align-items-center mb-2">
+        <span className="mr-2">Sync offset:</span>
+        <Button size="sm" variant="secondary" className="mr-1" onClick={() => applyOffset(offset - 1)}>
+          -1s
+        </Button>
+        <Button size="sm" variant="secondary" className="mr-1" onClick={() => applyOffset(offset - 0.1)}>
+          -0.1s
+        </Button>
+        <Form.Control
+          type="number"
+          step="0.1"
+          value={offset}
+          onChange={(e: any) => applyOffset(Number(e.target.value) || 0)}
+          style={{ width: "90px" }}
+          className="mx-1 d-inline-block"
+        />
+        <Button size="sm" variant="secondary" className="mx-1" onClick={() => applyOffset(offset + 0.1)}>
+          +0.1s
+        </Button>
+        <Button size="sm" variant="secondary" className="mr-2" onClick={() => applyOffset(offset + 1)}>
+          +1s
+        </Button>
+        {offset !== 0 && (
+          <Button size="sm" variant="outline-secondary" onClick={() => applyOffset(0)}>
+            Reset
+          </Button>
+        )}
+      </div>
+      <Form.Text className="text-muted mb-3 d-block">
+        Shifts the subtitles actually shown during playback (positive = later, negative =
+        earlier), not just this list - remembered for this scene.
+      </Form.Text>
+
+      {error ? <Alert variant="danger">{error}</Alert> : null}
+      {!error && !cueInfos && (
+        <div className="text-muted">
+          <Spinner animation="border" size="sm" className="mr-2" />
+          Loading subtitles…
+        </div>
+      )}
+      {cueInfos && cueInfos.length === 0 && (
+        <p className="text-muted">No cues found in this subtitle track.</p>
+      )}
+      {cueInfos && cueInfos.length > 0 && (
+        <ul className="list-unstyled subtitle-markers-subtitles-list">
+          {cueInfos.map((info, i) => {
+            // Computed from originalStart + offset, the same as the cue-mutating effect
+            // above, rather than read back off info.cue.startTime directly - that effect
+            // runs *after* the render this offset state change causes, so the cue object
+            // itself is still one step stale at the moment this renders.
+            const displayStart = Math.max(0, info.originalStart + offset);
+            return (
+              <li
+                key={i}
+                className="subtitle-markers-subtitles-cue"
+                onClick={() => setTimestamp(displayStart, true)}
+                style={{ cursor: "pointer" }}
+              >
+                <span className="text-muted mr-2">
+                  {TextUtils.secondsToTimestamp(displayStart)}
+                </span>
+                {stripVttTags(info.cue.text)}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+PluginApi.patch.before("ScenePage.Tabs", (props: any) => {
+  try {
+    if (!hasCaptions(props.scene)) return [props];
+    const navItem = (
+      <Nav.Item key="subtitle-markers-subtitles-tab-nav">
+        <Nav.Link eventKey={SUBTITLES_TAB_KEY}>Subtitles</Nav.Link>
+      </Nav.Item>
+    );
+    return [{ ...props, children: [...React.Children.toArray(props.children), navItem] }];
+  } catch (e) {
+    console.error("[SubtitleMarkers] Failed to add the Subtitles tab:", e);
+    return [props];
+  }
+});
+
+PluginApi.patch.before("ScenePage.TabContent", (props: any) => {
+  try {
+    if (!hasCaptions(props.scene)) return [props];
+    const tabPane = (
+      <Tab.Pane key="subtitle-markers-subtitles-tab-pane" eventKey={SUBTITLES_TAB_KEY}>
+        <SubtitlesTabPanel scene={props.scene} setTimestamp={props.setTimestamp} />
+      </Tab.Pane>
+    );
+    return [{ ...props, children: [...React.Children.toArray(props.children), tabPane] }];
+  } catch (e) {
+    console.error("[SubtitleMarkers] Failed to add the Subtitles tab content:", e);
     return [props];
   }
 });
