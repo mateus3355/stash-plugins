@@ -318,15 +318,9 @@ async function run() {
   window.sessionStorage.clear();
 
   const emotionCache = createEmotionCache({ key: 'css' });
-  // Captures the real history object SubtitleMarkersPage's own useHistory() call resolves -
-  // SubtitleMarkersPage needs a real Router ancestor for that to work at all (it always has
-  // one for real, registered via PluginApi.register.route into the app's own top-level
-  // Router), and MemoryRouter (unlike a real browser) keeps its location purely in memory,
-  // never touching window.location - this is how the test observes where it navigated to.
-  function HistoryCapture() {
-    window.__testHistory = ReactRouterDOM.useHistory();
-    return null;
-  }
+  // SceneCard needs a real Router ancestor (GridCard's <Link>, and SceneCard's own
+  // useHistory() for its scrubber click) - it always has one for real, registered via
+  // PluginApi.register.route into the app's own top-level Router.
   function Shell({ children }) {
     return React.createElement(
       EmotionCacheProvider,
@@ -340,7 +334,6 @@ async function run() {
           React.createElement(
             ReactRouterDOM.MemoryRouter,
             { initialEntries: ['/subtitle-markers'] },
-            React.createElement(HistoryCapture),
             children
           )
         )
@@ -444,28 +437,34 @@ async function run() {
   console.log('S9) the caption text is clamped (TruncatedText), not left to grow unbounded:', captionEl.classList.contains('TruncatedText') && captionEl.style.webkitLineClamp === '2');
 
   // GridCard renders both the thumbnail and the title as a <Link> to the plain scene URL
-  // (/scenes/1, no timestamp) - clicking either must still land on *this* result's own
-  // timestamp instead, not the scene generally.
+  // (/scenes/1, no timestamp) - clicking either must still open *this* result's own
+  // timestamp in a new tab instead (not history.push - consistent with the plain result
+  // links below the card, and with "Play All in Queue", both of which already open in a
+  // new tab rather than navigating the search page itself away).
   const firstCardThumbnailLink = resultCards[0].querySelector('a.scene-card-link');
   console.log('S5) the underlying thumbnail link, unclicked, still points at the plain scene URL:', firstCardThumbnailLink.getAttribute('href') === '/scenes/1');
+
+  const cardOpenCalls = [];
+  const realOpenForCards = window.open;
+  window.open = (url) => cardOpenCalls.push(url);
+
   await TestUtils.act(async () => {
     TestUtils.Simulate.click(firstCardThumbnailLink);
   });
   console.log(
-    'S6) clicking the thumbnail navigates to this result\'s own timestamp instead:',
-    window.__testHistory.location.pathname === '/scenes/1' && window.__testHistory.location.search === '?t=12.5'
+    'S6) clicking the thumbnail opens this result\'s own timestamp in a new tab instead:',
+    cardOpenCalls.length === 1 && cardOpenCalls[0] === '/scenes/1?t=12.5'
   );
 
   // A tag-count popover click (not a navigating link) must be left alone - not hijacked into
-  // navigating anywhere, since it isn't inside the thumbnail or title link at all.
-  await TestUtils.act(async () => {
-    window.__testHistory.push('/subtitle-markers');
-  });
+  // opening anything, since it isn't inside the thumbnail or title link at all.
+  cardOpenCalls.length = 0;
   const tagCountButton = resultCards[0].querySelector('.tag-count button');
   await TestUtils.act(async () => {
     TestUtils.Simulate.click(tagCountButton);
   });
-  console.log('S7) clicking the tag-count popover (not a navigating link) does not navigate away:', window.__testHistory.location.pathname === '/subtitle-markers');
+  console.log('S7) clicking the tag-count popover (not a navigating link) does not open anything:', cardOpenCalls.length === 0);
+  window.open = realOpenForCards;
 
   // ---------------------------------------------------------------------
   // "Play All in Queue" - plays through all 3 results in order: two hits in 1 (an

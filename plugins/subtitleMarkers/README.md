@@ -28,11 +28,12 @@ without watching the whole thing or editing scenes by hand one at a time.
   as soon as the search finishes (no background job or tag/title needed),
   each as a real `SceneCard` (the same card used everywhere else in Stash -
   tags, performers, the hover preview, etc.), fetched separately right after
-  the search itself resolves. Clicking the card's thumbnail or title still
-  jumps to this specific match's timestamp, not just the scene generally -
+  the search itself resolves. Clicking the card's thumbnail or title opens
+  this specific match's timestamp in a new tab (not just the scene
+  generally, and not navigating the search page itself away) -
   `SceneCard` itself has no notion of "this one subtitle hit", so clicks on
-  those two elements are caught before its own link navigates and redirected
-  to `?t=<seconds>` instead; everything else on the card (tag/performer
+  those two elements are caught before its own link navigates and opened as
+  `?t=<seconds>` instead; everything else on the card (tag/performer
   popovers, the organized icon, etc.) works completely normally, since none
   of that is part of either link to begin with. Turning marker creation on
   reveals the tag/title fields and switches to the background job described

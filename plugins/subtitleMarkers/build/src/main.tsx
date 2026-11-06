@@ -26,7 +26,7 @@ const { React } = PluginApi;
 const { useState, useEffect } = React;
 const Bootstrap = PluginApi.libraries.Bootstrap;
 const { Nav, Button, Form, Alert, ProgressBar, Spinner } = Bootstrap;
-const { NavLink, useHistory } = PluginApi.libraries.ReactRouterDOM;
+const { NavLink } = PluginApi.libraries.ReactRouterDOM;
 const { FontAwesomeIcon } = PluginApi.libraries.ReactFontAwesome;
 const FA = PluginApi.libraries.FontAwesomeSolid;
 
@@ -140,7 +140,6 @@ function SubtitleMarkersPage({ libraryPaths }: { libraryPaths: string[] }) {
   // can point at the same scene, at different timestamps - fetched once each either way).
   const [sceneMap, setSceneMap] = useState<Map<string, GQL.SlimSceneDataFragment> | null>(null);
   const [sceneMapError, setSceneMapError] = useState<string | null>(null);
-  const history = useHistory();
   const [cardsContainerRef, { width: cardsContainerWidth }] = useContainerDimensions();
   const cardWidth = useCardWidth(cardsContainerWidth, 1, [280, 340, 480, 640]);
 
@@ -247,7 +246,10 @@ function SubtitleMarkersPage({ libraryPaths }: { libraryPaths: string[] }) {
     if (!target.closest(".scene-card-link") && !target.closest(".card-section-title")) return;
     e.preventDefault();
     e.stopPropagation();
-    history.push(`/scenes/${result.sceneId}?t=${result.seconds}`);
+    // A new tab, not history.push - consistent with the result links below the card
+    // (target="_blank") and with "Play All in Queue": clicking a result is meant to jump to
+    // that moment without losing the search results page itself.
+    window.open(`/scenes/${result.sceneId}?t=${result.seconds}`, "_blank");
   }
 
   function handleRunClick() {
