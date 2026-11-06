@@ -427,6 +427,7 @@ async function run() {
 
   const resultCards = Array.from(container.querySelectorAll('.subtitle-markers-result-card'));
   console.log('S) a real SceneCard is rendered for each result (not a plain link):', resultCards.length === 3 && !!container.querySelector('.scene-card'));
+  console.log('S1) the cards row has a gap between cards:', container.querySelector('.subtitle-markers-result-cards').style.gap === '12px');
   console.log('S2) it shows the scene\'s title and a hover-preview video/image, not just plain text:', container.textContent.includes('Ember Evening') && !!container.querySelector('.scene-card-preview-video'));
   console.log('S3) it shows the scene\'s real tags, not just the matched subtitle text:', !!container.querySelector('.tag-count') && container.textContent.includes('knock knock'));
   console.log('S4) the matched subtitle text/timestamp is still shown alongside the card:', resultCards[0].textContent.includes('Someone said knock knock'));

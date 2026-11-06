@@ -308,7 +308,11 @@ function SubtitleMarkersPage({ libraryPaths }: { libraryPaths: string[] }) {
             Loading scene previews…
           </div>
         ) : (
-          <div className="row justify-content-center subtitle-markers-result-cards" ref={cardsContainerRef}>
+          <div
+            className="row justify-content-center subtitle-markers-result-cards"
+            ref={cardsContainerRef}
+            style={{ gap: "12px" }}
+          >
             {results.map((r, i) => {
               const scene = sceneMap.get(r.sceneId);
               // No scene data for this result (deleted since being indexed, or the lookup
