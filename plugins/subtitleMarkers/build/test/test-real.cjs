@@ -474,9 +474,14 @@ async function run() {
 
   TestUtils.Simulate.click(playAllButton);
   console.log(
-    'V) clicking it opens a real native SceneQueue link (split qs=/qt= lists, qi=0) in a new tab:',
-    queueOpenCalls.length === 1 && queueOpenCalls[0] === '/scenes/1?qs=1&qs=1&qs=2&qt=12.5&qt=40&qt=5&qi=0&autoplay=true&continue=true&t=12.5'
+    // These 3 results include two hits in the same scene (1) - qs= can only ever list a
+    // scene once (Stash's own backend rejects a literal duplicate id), so this is the
+    // qs=(deduped)/qe=(index:start) encoding, not the simpler qt= one.
+    'V) clicking it opens a real native SceneQueue link with no duplicate qs= entries, even with two hits in the same scene:',
+    queueOpenCalls.length === 1 && queueOpenCalls[0] === '/scenes/1?qs=1&qs=2&qe=0:12.5&qe=0:40&qe=1:5&qi=0&autoplay=true&continue=true&t=12.5'
   );
+  const vQsValues = new URLSearchParams(queueOpenCalls[0].split('?')[1]).getAll('qs');
+  console.log('V2) qs= itself has no repeats - the actual thing the Stash backend rejects:', new Set(vQsValues).size === vQsValues.length);
   window.open = realOpenForQueue;
 
   // --- Turning on "Also create scene markers" reveals the tag/title fields and switches the
