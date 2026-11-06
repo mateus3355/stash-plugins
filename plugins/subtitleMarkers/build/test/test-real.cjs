@@ -299,7 +299,10 @@ async function run() {
     'C12) a marker with its own title uses that instead:',
     queueFromMarkers.items[1].sceneId === '3' && queueFromMarkers.items[1].text === 'Custom title'
   );
-  console.log('C13) it opens the first item in a new tab:', openCalls.length === 1 && openCalls[0] === '/scenes/1?t=30&continue=true&autoplay=true');
+  console.log(
+    'C13) it opens the first item in a new tab, as a real native timed queue link:',
+    openCalls.length === 1 && openCalls[0] === '/scenes/1?tq=1:30&tq=3:90&tqi=0&t=30&autoplay=true&continue=true'
+  );
 
   // --- A page's own filterHook (e.g. a Tag's "Markers" tab, constraining to that tag) is
   // re-applied here too, not silently dropped - see the comment on the before() hook itself.

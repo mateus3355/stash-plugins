@@ -87,12 +87,18 @@ without watching the whole thing or editing scenes by hand one at a time.
   Prev/Next/Stop controls in a small overlay. The 20s countdown only runs
   while the video is actually playing - pausing to read or think suspends
   it, and resuming starts a fresh one, rather than silently auto-advancing
-  (and un-pausing) a video you deliberately paused. This isn't Stash's own
-  scene queue/"continue playlist" feature (that only ever restarts each next
-  scene from 0 - it has no concept of a per-item start time) - the plugin
-  tracks queue position itself instead, the same way its "open containing
-  folder" counterpart in Folder Browser injects into the player page outside
-  any `PatchComponent`.
+  (and un-pausing) a video you deliberately paused. Needs a small Stash
+  core addition (`TimedSceneQueue`, `src/models/sceneQueue.ts`) this plugin
+  reuses directly rather than hand-rolling its own: Stash's existing scene
+  queue/"continue playlist" only ever restarts the *next* scene from 0 (no
+  per-item start time, and no way to queue the same scene twice), which
+  can't express "these N marker hits, in order" at all. The plugin's own
+  contribution on top of that native queue is just the preview countdown
+  (the native "continue" only ever advances once a video *fully* ends) and
+  the position/Prev/Next/Stop overlay (nothing shows this queue's progress
+  natively either) - driven from outside the scene player page the same way
+  its "open containing folder" counterpart in Folder Browser injects into
+  it, since neither is a real `PatchComponent`.
 - **"Play All (Filtered)"** is the same queue, started from Stash's own
   native Markers list (and a Tag's "Markers" tab) instead of a search result
   list - it's a real `extraOperations` entry in that page's own "..."

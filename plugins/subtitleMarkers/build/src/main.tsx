@@ -7,6 +7,7 @@ import { SceneCard } from "src/components/Scenes/SceneCard";
 import { TruncatedText } from "src/components/Shared/TruncatedText";
 import { useCardWidth, useContainerDimensions } from "src/components/Shared/GridCard/GridCard";
 import { queryFindSceneMarkers, queryFindScenesByID } from "src/core/StashService";
+import { TimedSceneQueue } from "src/models/sceneQueue";
 import TextUtils from "src/utils/text";
 
 import type ReactNS from "react";
@@ -492,21 +493,24 @@ PluginApi.patch.before("MainNavBar.MenuItems", (props: any) => {
 });
 
 // ---------------------------------------------------------------------
-// "Play All in Queue" - plays through every search result in order, each
-// seeking to its own timestamp, with a short preview window per hit before
-// auto-advancing. Stash's own scene queue (SceneQueue/continuePlaylist,
-// src/models/sceneQueue.ts) only ever restarts each *subsequent* scene from
-// 0 - it has no concept of a per-item start time - so it can't drive this on
-// its own; this plugin tracks queue position itself instead.
+// "Play All in Queue" - plays through every search result in order, each seeking to its own
+// timestamp, with a short preview window per hit before auto-advancing. Stash's own player
+// now understands exactly this kind of queue natively (TimedSceneQueue, src/models/
+// sceneQueue.ts - added specifically to make this possible: unlike its own
+// SceneQueue/continuePlaylist, which can only ever restart each *next* scene from 0,
+// TimedSceneQueue carries a start time per item, and the same scene id can appear more than
+// once at different times). Its own ?tq=/?tqi= URL format is reused here via the real class
+// rather than hand-rolling a second copy of it, so both stay in sync automatically.
 //
-// The widget/listeners below aren't a real PatchComponent (nothing patches
-// "the scene player page" as a whole) - same situation, and same fix, as
-// Folder Browser's "open containing folder" button: watch the DOM for the
-// scene player with a MutationObserver and inject into it directly, outside
-// React's own tree. That also means cross-scene advances use a real
-// navigation (window.location.assign), not history.push - there's no Router
-// context out here to push through, same reasoning Folder Browser's own
-// README gives for using a plain <a href>.
+// What this plugin still adds on top, since the native player has no notion of it: a fixed
+// preview window per item (its own "continue" only advances once a video *fully* ends, which
+// defeats the point of quickly skimming many hits), and a position/Prev/Next/Stop overlay
+// (nothing shows this queue's progress natively either, since nothing wires it into
+// QueueViewer). Driving that from outside the scene player page - it isn't a real
+// PatchComponent, nothing patches "the scene player page" as a whole - uses the same
+// MutationObserver-based DOM injection as Folder Browser's "open containing folder" button,
+// which is also why cross-scene advances are a real navigation (window.location.assign), not
+// history.push - there's no Router context out here to push through.
 // ---------------------------------------------------------------------
 
 const QUEUE_STORAGE_KEY = "subtitleMarkersQueue";
@@ -557,12 +561,15 @@ function currentQueueSceneId(): string | null {
   return m ? m[1] : null;
 }
 
-function queueSceneLink(item: SearchResult) {
-  // continue=true matters here: Scene.tsx only disables its own native looping when
-  // continuePlaylist is true (permitLoop={!continuePlaylist}), and HTML5 video never fires
-  // "ended" while looping - without this, a hit in a scene shorter than
-  // QUEUE_PREVIEW_SECONDS would just loop forever instead of ever advancing.
-  return `/scenes/${item.sceneId}?t=${item.seconds}&continue=true&autoplay=true`;
+// Builds the link for a given index using the real TimedSceneQueue - SearchResult carries
+// extra display-only fields (sceneTitle, text) that class has no need for, so this is purely
+// an adapter between the two shapes, not a second copy of the URL format itself.
+function queueLink(queue: QueueState, index: number, options: { autoPlay?: boolean; continue?: boolean } = {}) {
+  const timedQueue = new TimedSceneQueue(
+    queue.items.map((r) => ({ sceneID: r.sceneId, start: r.seconds })),
+    index
+  );
+  return timedQueue.makeLink(index, options);
 }
 
 function startQueue(items: SearchResult[]) {
@@ -574,7 +581,7 @@ function startQueue(items: SearchResult[]) {
   // the moment it opens, which is how its own copy of this script finds the queue just
   // saved above. Every advance *after* that first jump still happens within that one new
   // tab (goToQueueIndex below), not a fresh tab per hit.
-  window.open(queueSceneLink(items[0]), "_blank");
+  window.open(queueLink({ items, index: 0 }, 0, { autoPlay: true, continue: true }), "_blank");
 }
 
 function handlePlayAllInQueue(results: SearchResult[]) {
@@ -620,7 +627,7 @@ function goToQueueIndex(queue: QueueState, index: number) {
     // this widget with it), but remove it explicitly rather than leaving it visible - and
     // clickable, in a now-stale position - for however long that takes.
     removeQueueWidget();
-    window.location.assign(queueSceneLink(item));
+    window.location.assign(queueLink(queue, index, { autoPlay: true, continue: true }));
   }
 }
 
