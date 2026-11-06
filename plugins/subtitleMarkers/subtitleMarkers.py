@@ -218,7 +218,21 @@ def path_prefix_regex(prefix):
     return "^" + re.escape(prefix) + r"\.[^./]+$"
 
 
-def run(path, search, tag_id, title, stash):
+def make_text_matcher(search_text, whole_word):
+    """Returns a function(text) -> bool for matching a cue's text against search_text -
+    plain case-insensitive substring by default (so e.g. "fail" matches "failed"), or, with
+    whole_word set, requiring the whole search phrase to sit on word boundaries (so "fail"
+    then only matches "fail", not "failed" or "failure") - the same \\b-based behaviour a
+    "match whole word" toggle has in most text editors. search_text is matched literally
+    either way (escaped before going into the regex), never as a pattern of its own."""
+    if whole_word:
+        pattern = re.compile(r"\b" + re.escape(search_text) + r"\b", re.IGNORECASE)
+        return lambda text: pattern.search(text) is not None
+    search_lower = search_text.lower()
+    return lambda text: search_lower in text.lower()
+
+
+def run(path, search, tag_id, title, stash, whole_word=False):
     """Searches, and creates a scene marker for every match (see module docstring-style
     comments on the dedup/tag/title behaviour throughout). Returns {"error": "..."} for
     invalid input, otherwise a dict of result counts."""
@@ -232,7 +246,7 @@ def run(path, search, tag_id, title, stash):
         log.error("No tag given.")
         return {"error": "no tag"}
 
-    search_lower = search.lower()
+    matcher = make_text_matcher(search, whole_word)
     marker_title = title or search
 
     srt_files = list(find_srt_files(path))
@@ -257,7 +271,7 @@ def run(path, search, tag_id, title, stash):
             log.warning(f"Could not read {srt_path}: {e}")
             continue
 
-        matches = [(start, text) for start, text in parse_srt(content) if search_lower in text.lower()]
+        matches = [(start, text) for start, text in parse_srt(content) if matcher(text)]
         if not matches:
             continue
         matched_cues += len(matches)
@@ -321,7 +335,7 @@ def run(path, search, tag_id, title, stash):
     }
 
 
-def search(path, search, stash):
+def search(path, search, stash, whole_word=False):
     """Searches without creating anything - every matching subtitle cue, with the scene it
     belongs to and the cue's start time, for linking straight to Stash's own
     `/scenes/<id>?t=<seconds>` (jumps to that point in the scene, no marker needed). Matches
@@ -336,7 +350,7 @@ def search(path, search, stash):
         log.error("No search text given.")
         return {"error": "no search text"}
 
-    search_lower = search.lower()
+    matcher = make_text_matcher(search, whole_word)
 
     srt_files = list(find_srt_files(path))
     log.info(f"Found {len(srt_files)} .srt file(s) under {path}")
@@ -357,7 +371,7 @@ def search(path, search, stash):
             log.warning(f"Could not read {srt_path}: {e}")
             continue
 
-        matches = [(start, text) for start, text in parse_srt(content) if search_lower in text.lower()]
+        matches = [(start, text) for start, text in parse_srt(content) if matcher(text)]
         if not matches:
             continue
         matched_cues += len(matches)
@@ -406,6 +420,15 @@ def search(path, search, stash):
     }
 
 
+def _truthy_arg(value):
+    """Plugin args normally arrive as strings (the UI sends them that way), but the
+    underlying GraphQL Map scalar can carry any JSON type - tolerate a real bool too rather
+    than assuming one or the other."""
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in ("true", "1", "yes")
+
+
 def main():
     json_input = json.loads(sys.stdin.read())
     args = json_input.get("args", {})
@@ -414,13 +437,15 @@ def main():
     path = args.get("path", "")
     search_text = args.get("search", "")
     mode = args.get("mode", "mark")
+    whole_word = _truthy_arg(args.get("wholeWord", False))
 
     if mode == "search":
-        result = search(path, search_text, stash)
+        result = search(path, search_text, stash, whole_word=whole_word)
     else:
         result = run(
             path=path,
             search=search_text,
+            whole_word=whole_word,
             tag_id=args.get("tagId", ""),
             title=args.get("title", ""),
             stash=stash,

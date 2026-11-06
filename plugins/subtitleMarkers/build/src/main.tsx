@@ -126,6 +126,7 @@ const STATUS_LABEL: Record<JobStatus, string> = {
 function SubtitleMarkersPage({ libraryPaths }: { libraryPaths: string[] }) {
   const [path, setPath] = useState("");
   const [search, setSearch] = useState("");
+  const [wholeWord, setWholeWord] = useState(false);
   const [createMarkers, setCreateMarkers] = useState(false);
   const [tagId, setTagId] = useState("");
   const [title, setTitle] = useState("");
@@ -181,7 +182,7 @@ function SubtitleMarkersPage({ libraryPaths }: { libraryPaths: string[] }) {
     setStarting(true);
     setJob(null);
     runPluginTask(
-      { path: path.trim(), search: searchTrimmed, tagId, title: title.trim() },
+      { path: path.trim(), search: searchTrimmed, wholeWord: String(wholeWord), tagId, title: title.trim() },
       `Searching subtitles for "${searchTrimmed}"`
     )
       .then((newJobId: string) => {
@@ -200,7 +201,7 @@ function SubtitleMarkersPage({ libraryPaths }: { libraryPaths: string[] }) {
     setResults(null);
     setSceneMap(null);
     setSceneMapError(null);
-    runPluginOperation({ mode: "search", path: path.trim(), search: search.trim() })
+    runPluginOperation({ mode: "search", path: path.trim(), search: search.trim(), wholeWord: String(wholeWord) })
       .then((output: { results: SearchResult[] }) => {
         setSearching(false);
         setResults(output.results);
@@ -391,6 +392,21 @@ function SubtitleMarkersPage({ libraryPaths }: { libraryPaths: string[] }) {
           disabled={busy}
         />
         <Form.Text className="text-muted">Case-insensitive, matched as plain text.</Form.Text>
+      </Form.Group>
+
+      <Form.Group>
+        <Form.Check
+          type="checkbox"
+          id="subtitle-markers-whole-word"
+          label="Match whole word only"
+          checked={wholeWord}
+          disabled={busy}
+          onChange={(e: any) => setWholeWord(e.target.checked)}
+        />
+        <Form.Text className="text-muted">
+          Off by default: "fail" also matches "failed"/"failure". Turn this on to require the
+          exact word (or phrase), so "fail" no longer matches those.
+        </Form.Text>
       </Form.Group>
 
       <Form.Group>

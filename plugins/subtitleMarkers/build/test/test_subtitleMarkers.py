@@ -12,6 +12,7 @@ from subtitleMarkers import (
     path_prefix_regex,
     find_srt_files,
     _translate_gitignore_pattern,
+    make_text_matcher,
     run,
     search,
 )
@@ -295,6 +296,35 @@ class FindSrtFilesStashignoreTests(unittest.TestCase):
         self.assertEqual(self.found(), {"a.srt"})
 
 
+class MakeTextMatcherTests(unittest.TestCase):
+    def test_default_is_a_case_insensitive_substring_match(self):
+        matcher = make_text_matcher("fail", whole_word=False)
+        self.assertTrue(matcher("The operation FAILED to complete"))
+
+    def test_whole_word_rejects_a_longer_word_containing_it(self):
+        matcher = make_text_matcher("fail", whole_word=True)
+        self.assertFalse(matcher("The operation failed to complete"))
+        self.assertFalse(matcher("a failure happened"))
+
+    def test_whole_word_matches_the_exact_word_case_insensitively(self):
+        matcher = make_text_matcher("fail", whole_word=True)
+        self.assertTrue(matcher("The test did FAIL today"))
+
+    def test_whole_word_matches_a_multi_word_phrase_as_a_unit(self):
+        matcher = make_text_matcher("fail to respond", whole_word=True)
+        self.assertTrue(matcher("the server did fail to respond again"))
+        # "respondent" continues past "respond" with no boundary in between - the phrase's
+        # own trailing \b must still hold, not just match as a loose prefix.
+        self.assertFalse(matcher("the server did fail to respondent requests"))
+
+    def test_whole_word_treats_search_text_literally_not_as_a_pattern(self):
+        # A "." in the search text must match a literal ".", not "any character" - whole_word
+        # must not turn user-provided text into a regex of its own.
+        matcher = make_text_matcher("a.b", whole_word=True)
+        self.assertTrue(matcher("it was a.b exactly"))
+        self.assertFalse(matcher("it was axb instead"))
+
+
 class RunIntegrationTests(unittest.TestCase):
     def setUp(self):
         self.tmpdir = tempfile.TemporaryDirectory()
@@ -452,6 +482,34 @@ class RunIntegrationTests(unittest.TestCase):
         result = run(self.tmpdir.name, "hello", "", "t", stash)
         self.assertIn("error", result)
 
+    def test_whole_word_off_by_default_still_matches_substrings(self):
+        self.write_srt("movie.srt", "1\n00:00:05,000 --> 00:00:06,000\nThe operation failed to complete\n")
+        video_path = os.path.join(self.tmpdir.name, "movie.mp4")
+        stash = FakeStash({video_path: "scene-1"})
+
+        result = run(self.tmpdir.name, "fail", "tag-1", "t", stash)
+
+        self.assertEqual(result["created"], 1)
+
+    def test_whole_word_on_rejects_a_substring_match(self):
+        self.write_srt("movie.srt", "1\n00:00:05,000 --> 00:00:06,000\nThe operation failed to complete\n")
+        video_path = os.path.join(self.tmpdir.name, "movie.mp4")
+        stash = FakeStash({video_path: "scene-1"})
+
+        result = run(self.tmpdir.name, "fail", "tag-1", "t", stash, whole_word=True)
+
+        self.assertEqual(result["created"], 0)
+        self.assertEqual(stash.created_markers, [])
+
+    def test_whole_word_on_still_matches_the_exact_word(self):
+        self.write_srt("movie.srt", "1\n00:00:05,000 --> 00:00:06,000\nThe test did fail today\n")
+        video_path = os.path.join(self.tmpdir.name, "movie.mp4")
+        stash = FakeStash({video_path: "scene-1"})
+
+        result = run(self.tmpdir.name, "fail", "tag-1", "t", stash, whole_word=True)
+
+        self.assertEqual(result["created"], 1)
+
 
 class SearchTests(unittest.TestCase):
     """search() - find matches and link straight to the scene at that timestamp, without
@@ -514,6 +572,24 @@ class SearchTests(unittest.TestCase):
         stash = FakeStash({})
         result = search(self.tmpdir.name, "", stash)
         self.assertIn("error", result)
+
+    def test_whole_word_on_rejects_a_substring_match(self):
+        self.write_srt("movie.srt", "1\n00:00:05,000 --> 00:00:06,000\nThe operation failed to complete\n")
+        video_path = os.path.join(self.tmpdir.name, "movie.mp4")
+        stash = FakeStash({video_path: "scene-1"})
+
+        result = search(self.tmpdir.name, "fail", stash, whole_word=True)
+
+        self.assertEqual(result["results"], [])
+
+    def test_whole_word_on_still_matches_the_exact_word(self):
+        self.write_srt("movie.srt", "1\n00:00:05,000 --> 00:00:06,000\nThe test did fail today\n")
+        video_path = os.path.join(self.tmpdir.name, "movie.mp4")
+        stash = FakeStash({video_path: "scene-1"})
+
+        result = search(self.tmpdir.name, "fail", stash, whole_word=True)
+
+        self.assertEqual(len(result["results"]), 1)
 
 
 class MainOutputEnvelopeTests(unittest.TestCase):

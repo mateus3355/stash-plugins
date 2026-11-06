@@ -363,6 +363,9 @@ async function run() {
   // "Also create scene markers" is off by default - no tag/title fields, no marker-only UI.
   console.log('F5) tag select is NOT shown by default (marker creation is opt-in):', !container.querySelector('.tag-select'));
 
+  const wholeWordCheckbox = container.querySelector('#subtitle-markers-whole-word');
+  console.log('F6) "Match whole word only" checkbox is present and unchecked by default:', !!wholeWordCheckbox && wholeWordCheckbox.checked === false);
+
   let runButton = Array.from(container.querySelectorAll('button')).find((b) => b.textContent === 'Search' || b.textContent === 'Searching…');
   console.log('G) Run button starts disabled (no path/search filled yet):', runButton.disabled === true);
 
@@ -402,6 +405,23 @@ async function run() {
       && searchCall.variables.args.path === '/lib/A'
       && searchCall.variables.args.search === 'knock knock'
   );
+  console.log('P2) wholeWord defaults to "false" (unchecked) in the args sent:', searchCall.variables.args.wholeWord === 'false');
+
+  // Checking "Match whole word only" and searching again sends wholeWord: "true" - then
+  // unchecked again, so the rest of this test continues from the same default state.
+  await TestUtils.act(async () => {
+    TestUtils.Simulate.change(wholeWordCheckbox, { target: { checked: true } });
+  });
+  await TestUtils.act(async () => {
+    TestUtils.Simulate.click(runButton);
+    await new Promise((r) => setTimeout(r, 20));
+  });
+  const wholeWordSearchCall = graphqlCalls.filter((c) => c.name === 'SubtitleMarkersSearch').pop();
+  console.log('P3) checking it sends wholeWord: "true" on the next search:', !!wholeWordSearchCall && wholeWordSearchCall.variables.args.wholeWord === 'true');
+  await TestUtils.act(async () => {
+    TestUtils.Simulate.change(wholeWordCheckbox, { target: { checked: false } });
+    await new Promise((r) => setTimeout(r, 20));
+  });
   console.log('Q) no marker-creation calls were made in search-only mode:', !graphqlCalls.some((c) => c.name === 'SubtitleMarkersRunTask'));
 
   // The real SceneCard needs its own scene data (tags, preview, etc.) - a separate fetch,
@@ -531,6 +551,7 @@ async function run() {
       && runCall.variables.args_map.search === 'knock knock'
       && runCall.variables.args_map.tagId === 't1'
   );
+  console.log('J2) ...including wholeWord: "false" (left unchecked for this run):', runCall.variables.args_map.wholeWord === 'false');
 
   // First poll already landed (RUNNING at 50%) - a progress bar should be showing.
   console.log('K) shows a progress bar while the job is running:', !!container.querySelector('.progress-bar'));

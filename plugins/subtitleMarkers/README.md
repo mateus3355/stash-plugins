@@ -43,12 +43,17 @@ without watching the whole thing or editing scenes by hand one at a time.
   the same convention Stash itself uses for captions - `movie.srt` or
   `movie.en.srt` next to `movie.mp4` belongs to that scene. The scene has to
   already be in your library (scanned in) for a marker to be created.
-- **The search is a plain substring, case-insensitive** - not a regex, and
-  not whole-word-only, so searching "fail" matches "fail**ed** to respond".
-  It's matched against each subtitle cue's text (multi-line cues are joined
-  into one line first, and inline formatting - `<i>`, `<font color=...>`,
-  ASS `{\an8}`-style codes - is stripped first too, so a phrase split across
-  a tag like `<i>failed</i> to respond` still matches "failed to").
+- **The search is a plain substring, case-insensitive** - not a regex, so
+  searching "fail" matches "fail**ed** to respond". It's matched against each
+  subtitle cue's text (multi-line cues are joined into one line first, and
+  inline formatting - `<i>`, `<font color=...>`, ASS `{\an8}`-style codes - is
+  stripped first too, so a phrase split across a tag like `<i>failed</i> to
+  respond` still matches "failed to"). Turn on **Match whole word only** to
+  require the exact word or phrase instead (word-boundary matching, same as
+  most text editors' "whole word" toggle) - with it on, "fail" no longer
+  matches "failed"/"failure", only "fail" on its own; a multi-word phrase like
+  "fail to respond" is still matched as a single unit (boundaries only at its
+  very start/end, not between its own words).
 - **A result (or, with marker creation on, a marker) is produced for each
   matching cue's start time**, except where that would be a near-duplicate
   (within 3 seconds) of one already found - either earlier in the same run,
