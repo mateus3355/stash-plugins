@@ -1,0 +1,16 @@
+name: Missing Assets
+description: >-
+  Scans the library for scenes missing a cover, phash, scrubber sprite,
+  scene preview, or marker preview, and lists them with links straight to
+  each one.
+version: 1.0
+url: https://github.com/mateus3355/stash-plugins
+
+ui:
+  javascript:
+    - missingAssets.js
+
+exec:
+  - python
+  - "{pluginDir}/missingAssets.py"
+interface: raw
