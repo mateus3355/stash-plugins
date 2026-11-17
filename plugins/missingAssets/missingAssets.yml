@@ -1,16 +1,36 @@
 name: Missing Assets
 description: >-
   Scans the library for scenes missing a cover, phash, scrubber sprite,
-  scene preview, or marker preview, and lists them with links straight to
-  each one.
+  scene preview, or marker preview, and tags them under a "Missing Assets"
+  parent tag with one child tag per missing-asset type.
 version: 1.0
 url: https://github.com/mateus3355/stash-plugins
-
-ui:
-  javascript:
-    - missingAssets.js
 
 exec:
   - python
   - "{pluginDir}/missingAssets.py"
 interface: raw
+
+tasks:
+  - name: Scan and Tag
+    description: >
+      Scans every scene and tags each one found missing something under the
+      matching child tag of "Missing Assets" (creating the tags first if
+      they don't already exist). Re-running also untags scenes that no
+      longer qualify, so the tags stay accurate as you fix things.
+    defaultArgs:
+      mode: scan_and_tag
+  - name: Create Tags
+    description: >
+      Creates the "Missing Assets" parent tag and its child tags (one per
+      missing-asset type) if they don't already exist, without scanning or
+      tagging anything yet.
+    defaultArgs:
+      mode: create_tags
+  - name: Remove Tags
+    description: >
+      Removes every tag this plugin created (untagging every scene first),
+      including the "Missing Assets" parent tag. Leaves everything else in
+      your library untouched.
+    defaultArgs:
+      mode: remove_tags

@@ -1,28 +1,39 @@
 # Missing Assets
 
-Adds a **Missing Assets** item to the main nav bar, leading to a page with a
-single **Scan Library** button. Scanning walks every scene in your library
-and reports, in separate sections, anything missing:
+Three plugin tasks (Settings → Tasks → Plugin Tasks), no nav bar item or
+custom page - just tags.
 
-- **Cover** - no cover image set for the scene at all.
-- **Phash** - no perceptual hash fingerprint (duplicate detection can't
-  compare this scene against others without one).
-- **Scrubber sprite** - the hover-scrub thumbnail sprite hasn't been
-  generated.
-- **Scene preview** - the scene's own hover-preview video hasn't been
-  generated.
-- **Marker preview** - one of the scene's markers is missing its own
-  preview video/image/screenshot.
-- **No markers** - the scene has no scene markers at all.
-- **Can't be checked (no fingerprint)** - the scene has no checksum/oshash
-  of whatever type your server names generated files after, so sprite/
-  preview/marker-preview can't be looked up on disk for it at all (cover and
-  phash are unaffected - those come straight from the database).
+- **Scan and Tag** - scans every scene in your library and tags each one
+  found missing something under a **Missing Assets** parent tag, with one
+  child tag per missing-asset type:
+  - **Missing Cover** - no cover image set for the scene at all.
+  - **Missing Phash** - no perceptual hash fingerprint (duplicate detection
+    can't compare this scene against others without one).
+  - **Missing Sprite** - the hover-scrub thumbnail sprite hasn't been
+    generated.
+  - **Missing Scene Preview** - the scene's own hover-preview video hasn't
+    been generated.
+  - **Missing Marker Preview** - at least one of the scene's markers is
+    missing its own preview video/image/screenshot.
+  - **No Markers** - the scene has no scene markers at all.
+  - **No Fingerprint** - the scene has no checksum/oshash of whatever type
+    your server names generated files after, so sprite/preview/
+    marker-preview can't be looked up on disk for it at all (cover and
+    phash are unaffected - those come straight from the database).
 
-Every entry links straight to that scene (`/scenes/<id>`), and a missing
-marker preview links straight to that marker's own timestamp
-(`/scenes/<id>?t=<seconds>`) - opened in a new tab, so the report itself
-stays put.
+  Creates the tags first if they don't already exist. Re-running keeps
+  every tag's membership in sync - a scene that no longer qualifies (its
+  preview got generated since the last run, say) has the tag taken back
+  off, not just left stale - so you can tag, fix some, re-scan, and watch
+  the counts shrink. Once tagged, use Stash's own Tags page (or the Scenes
+  page, filtered by tag) to browse, select, and bulk-generate whatever each
+  child tag is missing - this plugin only finds and labels them, it doesn't
+  generate anything itself.
+- **Create Tags** - creates the parent and child tags on their own,
+  without scanning or tagging anything yet.
+- **Remove Tags** - removes every tag this plugin created (untagging every
+  scene first), including the parent. Leaves everything else in your
+  library untouched.
 
 ## How it works
 
@@ -35,37 +46,38 @@ stays put.
   always builds a URL for them regardless of whether the file is actually
   there, and the route just 404s if it's missing when something requests
   it. The only way to know ahead of time is to check the filesystem
-  directly, the same way this plugin's companion, Subtitle Markers, reads
+  directly, the same way this fork's Subtitle Markers plugin reads
   subtitle files directly rather than going through the API for them.
   Generated files are named after the scene's own hash (whichever one your
   server is configured to name them after - MD5 checksum or oshash,
-  `Settings → Library → Generated file naming`), so this plugin reads that
-  setting and your `generatedPath`, and builds the exact same path Stash's
-  own generator would have written to
+  `Settings → Library → Generated file naming`) - read off the scene's
+  *primary file's* own fingerprints (`Scene.checksum`/`.oshash` no longer
+  exist on the GraphQL schema, despite still being in its raw `.graphql`
+  source), not round-tripped through a second lookup. This plugin builds
+  the exact same path Stash's own generator would have written to
   (`<generatedPath>/vtt/<hash>_sprite.jpg`,
   `<generatedPath>/screenshots/<hash>.mp4`,
   `<generatedPath>/markers/<hash>/<seconds>.jpg`, with `<seconds>`
   truncated toward zero, exactly like Stash's own marker generator does).
   A scene with no fingerprint of the active algorithm at all can't be
-  checked this way, and shows up under its own section instead of silently
-  being skipped.
-- **Runs as a single synchronous operation** (`runPluginOperation`), not a
-  tracked background job - this is a read-only report, and a background
-  job's result isn't retrievable afterwards (only its log output is), so
-  getting the full, structured result back to the page needs the
-  synchronous call instead (same reasoning Subtitle Markers' own
-  search-only mode uses it for).
-- **A section that found nothing is hidden entirely** - if everything comes
-  back clean, you get a plain "Nothing missing" message instead of six empty
-  headings.
+  checked this way, and gets its own "No Fingerprint" tag instead of
+  silently being skipped.
+- **Tagging is done in bulk** (`bulkSceneUpdate`), a handful of GraphQL
+  calls total regardless of library size - not one mutation per scene.
+- **Runs as a tracked background job** (`runPluginTask`, the same as any
+  other plugin task) - progress and a final summary go to Settings → Logs,
+  the same as this fork's other task-only plugins (e.g. List Error Files).
 
-## Two parts
+## Parts
 
-- **UI** (`missingAssets.js`, compiled - see `build/README.md`): the
-  "Scan Library" button and the results list.
-- **Server-side task** (`missingAssets.py`): does the actual work - paging
-  through every scene via Stash's GraphQL API, and checking the filesystem
-  directly for whatever isn't tracked in the database. Requires `requests`
-  to be installed for the Python interpreter Stash uses to run plugins, and
-  runs on the Stash server itself (the only place that can read its own
-  generated-content folder directly).
+- **`missingAssets.py`** - the task itself: paging through every scene via
+  Stash's GraphQL API, checking the filesystem directly for whatever isn't
+  tracked in the database, and creating/syncing the tags. Requires
+  `requests` to be installed for the Python interpreter Stash uses to run
+  plugins, and runs on the Stash server itself (the only place that can
+  read its own generated-content folder directly).
+- **`stash_interface.py`** - the small GraphQL client the task uses
+  (configuration, tag CRUD, scene paging, bulk tag updates).
+
+No UI/JavaScript at all - everything here is a plain Python task, the same
+shape as List Error Files.
