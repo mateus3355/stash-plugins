@@ -103,11 +103,10 @@ def make_file(id, fingerprints):
     return {"id": id, "fingerprints": [{"type": t, "value": v} for t, v in fingerprints.items()]}
 
 
-def make_scene(id, title="", files=None, primary_file_id=None, markers=None):
+def make_scene(id, title="", files=None, markers=None):
     return {
         "id": id,
         "title": title,
-        "primary_file_id": primary_file_id,
         "files": files or [],
         "scene_markers": markers or [],
     }
@@ -115,16 +114,13 @@ def make_scene(id, title="", files=None, primary_file_id=None, markers=None):
 
 class PrimaryFileAndHashTests(unittest.TestCase):
     def test_primary_file_defaults_to_the_first_file(self):
+        # There's no primary_file_id on the real Scene type (despite being in the raw
+        # .graphql schema source - stale there too, same as checksum/oshash), so files[0] is
+        # the only available stand-in.
         f1 = make_file("f1", {"oshash": "h1"})
         f2 = make_file("f2", {"oshash": "h2"})
         scene = make_scene("1", files=[f1, f2])
         self.assertEqual(primary_file(scene), f1)
-
-    def test_primary_file_uses_primary_file_id_when_set(self):
-        f1 = make_file("f1", {"oshash": "h1"})
-        f2 = make_file("f2", {"oshash": "h2"})
-        scene = make_scene("1", files=[f1, f2], primary_file_id="f2")
-        self.assertEqual(primary_file(scene), f2)
 
     def test_primary_file_is_none_with_no_files(self):
         self.assertIsNone(primary_file(make_scene("1")))

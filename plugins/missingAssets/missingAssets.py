@@ -34,18 +34,13 @@ CHILD_TAGS = [
 
 
 def primary_file(scene):
-    """The scene's primary VideoFile dict, or None if it has no files at all. Falls back to
-    the first file when primary_file_id isn't set - the same default a single-file scene
-    (the overwhelming majority) ends up with internally."""
+    """The scene's primary VideoFile dict, or None if it has no files at all. There's no
+    primary_file_id on Scene (despite being in the raw .graphql schema source - that part of
+    it is stale, no resolver actually backs it), so files[0] is the closest available
+    stand-in - the same file a single-file scene (the overwhelming majority) would resolve
+    to either way."""
     files = scene.get("files") or []
-    if not files:
-        return None
-    primary_id = scene.get("primary_file_id")
-    if primary_id:
-        for f in files:
-            if f["id"] == primary_id:
-                return f
-    return files[0]
+    return files[0] if files else None
 
 
 def scene_hash(scene, algorithm):

@@ -127,11 +127,13 @@ query MissingAssetsMissingPage($isMissing: String, $page: Int!, $perPage: Int!) 
         return data["findScenes"]["scenes"]
 
     def find_scenes_page(self, page, per_page):
-        """One page of every scene's id/title/primary file/fingerprints plus its markers'
+        """One page of every scene's id/title/files/fingerprints plus its markers'
         id/seconds - everything needed to compute (and check the existence of) its generated
         sprite, scene preview, and per-marker preview files on disk. Scene.checksum/.oshash
         (which would have made this simpler) no longer exist on the GraphQL schema - the
-        hash has to be read off the primary file's own fingerprints instead."""
+        hash has to be read off a file's own fingerprints instead. There's no primary_file_id
+        on Scene either (despite being in the raw .graphql schema source - stale there too),
+        so files[0] is the closest available stand-in for "the primary file"."""
         query = """
 query MissingAssetsScenesPage($page: Int!, $perPage: Int!) {
   findScenes(filter: { page: $page, per_page: $perPage, sort: "id", direction: ASC }) {
@@ -139,7 +141,6 @@ query MissingAssetsScenesPage($page: Int!, $perPage: Int!) {
     scenes {
       id
       title
-      primary_file_id
       files { id fingerprints { type value } }
       scene_markers { id seconds }
     }
