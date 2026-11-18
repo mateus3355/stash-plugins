@@ -8,12 +8,14 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from missingAssets import (
     CHILD_TAGS,
     PARENT_TAG_NAME,
+    PLUGIN_ID,
     primary_file,
     scene_hash,
     sprite_path,
     preview_path,
     marker_screenshot_path,
     scan,
+    enabled_categories,
     ensure_tags,
     scan_and_tag,
     remove_tags,
@@ -36,12 +38,14 @@ class FakeStash:
         missing_phash=None,
         existing_tags=None,
         scene_tags=None,
+        plugin_settings=None,
     ):
         self.scenes = scenes
         self.generated_path = generated_path
         self.algorithm = algorithm
         self.missing_cover = missing_cover or []
         self.missing_phash = missing_phash or []
+        self.plugin_settings = plugin_settings or {}
 
         self.tags = {}
         self._next_tag_id = 1
@@ -55,6 +59,10 @@ class FakeStash:
 
     def get_configuration(self):
         return {"generatedPath": self.generated_path, "videoFileNamingAlgorithm": self.algorithm}
+
+    def get_plugin_settings(self, plugin_id):
+        assert plugin_id == PLUGIN_ID
+        return dict(self.plugin_settings)
 
     def count_scenes_missing(self, field):
         return len(self.missing_cover if field == "cover" else self.missing_phash)
@@ -273,6 +281,46 @@ class ScanTests(unittest.TestCase):
         self.assertEqual(result["totalScanned"], 0)
         self.assertEqual(result["missingSprite"], [])
 
+    def test_a_disabled_category_comes_back_empty_even_though_it_would_otherwise_match(self):
+        scene = self.oshash_scene("1", "Bare Scene", "h1")
+        stash = FakeStash([scene], self.generated_path)
+
+        result = scan(stash, page_size=10, enabled={"missingPreview"})
+
+        self.assertEqual(result["missingSprite"], [])  # disabled - not even checked
+        self.assertEqual(result["missingPreview"], [{"id": "1", "title": "Bare Scene"}])
+        # Scenes are still counted as scanned either way.
+        self.assertEqual(result["totalScanned"], 1)
+
+    def test_disabling_every_file_based_category_skips_the_hash_lookup_entirely(self):
+        # A scene with no fingerprint at all would normally land in noFingerprint - but with
+        # every file-based category (including noFingerprint itself) disabled, scene_hash is
+        # never even consulted, so nothing is reported for it.
+        scene = make_scene("1", "No Hash Scene", files=[])
+        stash = FakeStash([scene], self.generated_path, missing_cover=[{"id": "1", "title": "No Hash Scene"}])
+
+        result = scan(stash, page_size=10, enabled={"missingCover"})
+
+        self.assertEqual(result["missingCover"], [{"id": "1", "title": "No Hash Scene"}])
+        self.assertEqual(result["noFingerprint"], [])
+        self.assertEqual(result["totalScanned"], 1)
+
+
+class EnabledCategoriesTests(unittest.TestCase):
+    def test_everything_is_enabled_when_nothing_has_been_configured_yet(self):
+        stash = FakeStash([], "/gen")
+        self.assertEqual(enabled_categories(stash), {key for key, *_ in CHILD_TAGS})
+
+    def test_checking_a_disable_setting_turns_off_just_that_one_category(self):
+        stash = FakeStash([], "/gen", plugin_settings={"disableSprite": True})
+        enabled = enabled_categories(stash)
+        self.assertNotIn("missingSprite", enabled)
+        self.assertEqual(enabled, {key for key, *_ in CHILD_TAGS} - {"missingSprite"})
+
+    def test_an_explicitly_false_disable_setting_still_means_enabled(self):
+        stash = FakeStash([], "/gen", plugin_settings={"disableSprite": False})
+        self.assertIn("missingSprite", enabled_categories(stash))
+
 
 class EnsureTagsTests(unittest.TestCase):
     def test_creates_the_parent_and_all_seven_children_when_none_exist(self):
@@ -283,7 +331,7 @@ class EnsureTagsTests(unittest.TestCase):
         self.assertEqual(len(tag_ids), len(CHILD_TAGS))
         parent = stash.find_tag(PARENT_TAG_NAME)
         self.assertIsNotNone(parent)
-        for key, name, _ in CHILD_TAGS:
+        for key, name, _, _ in CHILD_TAGS:
             tag = stash.tags[tag_ids[key]]
             self.assertEqual(tag["name"], name)
             self.assertEqual(tag["parent_ids"], [parent["id"]])
@@ -354,6 +402,26 @@ class ScanAndTagTests(unittest.TestCase):
 
         self.assertEqual(stash.find_scene_ids_with_tag("2"), {"1"})
         # No bulk call was needed at all for this tag - already exactly right.
+        self.assertFalse(any(t == "2" for _, t, _ in stash.bulk_calls))
+
+    def test_a_disabled_category_is_skipped_and_its_existing_tag_membership_untouched(self):
+        # Scene "1" is tagged Missing Sprite from a previous run, and still has no sprite
+        # file now either - but tracking is disabled, so it must be left exactly as it is,
+        # not synced (even though nothing would actually change if it were).
+        scene = make_scene("1", "Bare Scene", files=[make_file("f1", {"oshash": "h1"})])
+        existing_parent = {"id": "1", "name": PARENT_TAG_NAME, "parent_ids": []}
+        existing_sprite_tag = {"id": "2", "name": "Missing Sprite", "parent_ids": ["1"]}
+        stash = FakeStash(
+            [scene],
+            self.generated_path,
+            existing_tags=[existing_parent, existing_sprite_tag],
+            scene_tags={"2": {"1"}},
+            plugin_settings={"disableSprite": True},
+        )
+
+        scan_and_tag(stash)
+
+        self.assertEqual(stash.find_scene_ids_with_tag("2"), {"1"})
         self.assertFalse(any(t == "2" for _, t, _ in stash.bulk_calls))
 
 

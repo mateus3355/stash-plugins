@@ -15,17 +15,38 @@ PARENT_TAG_DESCRIPTION = (
     "for which one. Created/maintained by the Missing Assets plugin's tasks."
 )
 
-# (result key, tag name, tag description) - the result key matches scan()'s own return dict,
-# and is also the id each find_scenes_* page is grouped by in scan_and_tag().
+# Must match the plugin's yml filename (without extension) - that's how a plugin's own
+# settings (Settings -> Plugins -> Missing Assets) are looked up back from it.
+PLUGIN_ID = "missingAssets"
+
+# (result key, tag name, tag description, plugin "disable" setting key) - the result key
+# matches scan()'s own return dict, and is also the id each find_scenes_* page is grouped by
+# in scan_and_tag(). The setting key is one of this plugin's own BOOLEAN settings (yml) -
+# checking it in Settings -> Plugins stops that one category being scanned/tagged at all,
+# without touching any tag or scene it already created while it was on. Named as a
+# *disable* flag, not an enable one, specifically so its own unset-by-default state (Stash's
+# Settings -> Plugins UI renders an unset BOOLEAN setting as unchecked, regardless of what a
+# plugin itself would otherwise default it to) already means "not disabled" - no mismatch
+# between what the checkbox shows and what's actually happening, and nothing needs touching
+# for every category to keep being tracked by default.
 CHILD_TAGS = [
-    ("missingCover", "Missing Cover", "No cover image set for this scene at all."),
-    ("missingPhash", "Missing Phash", "No perceptual hash fingerprint for this scene."),
-    ("missingSprite", "Missing Sprite", "The hover-scrub thumbnail sprite hasn't been generated for this scene."),
-    ("missingPreview", "Missing Scene Preview", "The scene's own hover-preview video hasn't been generated."),
-    ("missingMarkerPreview", "Missing Marker Preview", "At least one of this scene's markers is missing its own preview video/image/screenshot."),
-    ("noMarkers", "No Markers", "This scene has no scene markers at all."),
-    ("noFingerprint", "No Fingerprint", "No checksum/oshash of this server's active naming algorithm - sprite/preview/marker-preview can't be checked for this scene at all."),
+    ("missingCover", "Missing Cover", "No cover image set for this scene at all.", "disableCover"),
+    ("missingPhash", "Missing Phash", "No perceptual hash fingerprint for this scene.", "disablePhash"),
+    ("missingSprite", "Missing Sprite", "The hover-scrub thumbnail sprite hasn't been generated for this scene.", "disableSprite"),
+    ("missingPreview", "Missing Scene Preview", "The scene's own hover-preview video hasn't been generated.", "disablePreview"),
+    ("missingMarkerPreview", "Missing Marker Preview", "At least one of this scene's markers is missing its own preview video/image/screenshot.", "disableMarkerPreview"),
+    ("noMarkers", "No Markers", "This scene has no scene markers at all.", "disableNoMarkers"),
+    ("noFingerprint", "No Fingerprint", "No checksum/oshash of this server's active naming algorithm - sprite/preview/marker-preview can't be checked for this scene at all.", "disableNoFingerprint"),
 ]
+
+
+def enabled_categories(stash):
+    """Which result keys are actually enabled, per this plugin's own settings (Settings ->
+    Plugins -> Missing Assets) - a category is enabled unless its own "disable" setting has
+    been explicitly checked, so a fresh install (nothing saved yet) behaves exactly like
+    before this was configurable at all."""
+    settings = stash.get_plugin_settings(PLUGIN_ID)
+    return {key for key, _, _, disable_key in CHILD_TAGS if not settings.get(disable_key, False)}
 
 
 # ---------------------------------------------------------------------------
@@ -101,23 +122,35 @@ def _collect_missing_pages(stash, field, total_count, page_size=PAGE_SIZE):
     return results
 
 
-def scan(stash, page_size=PAGE_SIZE):
+def scan(stash, page_size=PAGE_SIZE, enabled=None):
     """Walks the whole library once, cross-referencing the database against what's actually
     on disk in the generated-content folder, for everything that isn't itself tracked in the
     database (sprite/scene-preview/marker-preview files are plain generated files - Stash
     doesn't record whether they exist, only builds a URL for them unconditionally, so the
     only way to know is to check the filesystem directly). Cover and phash *are* tracked in
     the database (scenes.cover_blob, the fingerprints table), so those two use Stash's own
-    native is_missing filter instead of a file check - faster, and the authoritative source."""
+    native is_missing filter instead of a file check - faster, and the authoritative source.
+
+    enabled, if given, is the set of result keys to actually check (see enabled_categories) -
+    everything else comes back as an empty list, and the per-scene file checks (and even the
+    hash lookup itself) are skipped entirely once every file-based category is disabled, not
+    just left to run and be discarded."""
+    if enabled is None:
+        enabled = {key for key, *_ in CHILD_TAGS}
+
     config = stash.get_configuration()
     generated_path = config.get("generatedPath") or ""
     algorithm = config.get("videoFileNamingAlgorithm") or "OSHASH"
 
-    missing_cover = _collect_missing_pages(
-        stash, "cover", stash.count_scenes_missing("cover"), page_size
+    missing_cover = (
+        _collect_missing_pages(stash, "cover", stash.count_scenes_missing("cover"), page_size)
+        if "missingCover" in enabled
+        else []
     )
-    missing_phash = _collect_missing_pages(
-        stash, "phash", stash.count_scenes_missing("phash"), page_size
+    missing_phash = (
+        _collect_missing_pages(stash, "phash", stash.count_scenes_missing("phash"), page_size)
+        if "missingPhash" in enabled
+        else []
     )
 
     missing_sprite = []
@@ -125,6 +158,14 @@ def scan(stash, page_size=PAGE_SIZE):
     missing_marker_preview = []
     no_markers = []
     no_fingerprint = []
+
+    file_based_enabled = enabled & {
+        "missingSprite",
+        "missingPreview",
+        "missingMarkerPreview",
+        "noMarkers",
+        "noFingerprint",
+    }
 
     page = 1
     total = None
@@ -141,30 +182,36 @@ def scan(stash, page_size=PAGE_SIZE):
             scanned += 1
             log.progress(scanned / total if total else 1)
 
-            h = scene_hash(scene, algorithm)
-            if not h:
-                no_fingerprint.append(_entry(scene))
+            if not file_based_enabled:
                 continue
 
-            if not os.path.isfile(sprite_path(generated_path, h)):
+            h = scene_hash(scene, algorithm)
+            if not h:
+                if "noFingerprint" in enabled:
+                    no_fingerprint.append(_entry(scene))
+                continue
+
+            if "missingSprite" in enabled and not os.path.isfile(sprite_path(generated_path, h)):
                 missing_sprite.append(_entry(scene))
-            if not os.path.isfile(preview_path(generated_path, h)):
+            if "missingPreview" in enabled and not os.path.isfile(preview_path(generated_path, h)):
                 missing_preview.append(_entry(scene))
 
             markers = scene.get("scene_markers") or []
             if not markers:
-                no_markers.append(_entry(scene))
+                if "noMarkers" in enabled:
+                    no_markers.append(_entry(scene))
                 continue
-            for marker in markers:
-                if not os.path.isfile(marker_screenshot_path(generated_path, h, marker["seconds"])):
-                    missing_marker_preview.append(
-                        {
-                            "sceneId": scene["id"],
-                            "sceneTitle": scene.get("title") or "",
-                            "markerId": marker["id"],
-                            "seconds": marker["seconds"],
-                        }
-                    )
+            if "missingMarkerPreview" in enabled:
+                for marker in markers:
+                    if not os.path.isfile(marker_screenshot_path(generated_path, h, marker["seconds"])):
+                        missing_marker_preview.append(
+                            {
+                                "sceneId": scene["id"],
+                                "sceneTitle": scene.get("title") or "",
+                                "markerId": marker["id"],
+                                "seconds": marker["seconds"],
+                            }
+                        )
 
         if len(scenes) < page_size:
             break
@@ -208,7 +255,7 @@ def ensure_tags(stash):
         log.info(f"Parent tag already exists: '{PARENT_TAG_NAME}' (ID: {parent['id']})")
 
     tag_ids = {}
-    for key, name, description in CHILD_TAGS:
+    for key, name, description, _ in CHILD_TAGS:
         tag = stash.find_tag(name)
         if tag is None:
             tag = stash.create_tag(name, description, parent_ids=[parent["id"]])
@@ -220,13 +267,16 @@ def ensure_tags(stash):
 
 
 def scan_and_tag(stash):
-    """Scans the library, then brings each child tag's membership exactly in line with
-    what's actually missing right now - adding it to scenes newly found, and taking it back
-    off scenes that no longer qualify (e.g. a preview that's since been generated), so
+    """Scans the library, then brings each *enabled* child tag's membership exactly in line
+    with what's actually missing right now - adding it to scenes newly found, and taking it
+    back off scenes that no longer qualify (e.g. a preview that's since been generated), so
     re-running this after fixing some of them keeps the tags accurate instead of just
-    accumulating."""
+    accumulating. A disabled category (Settings -> Plugins -> Missing Assets) is skipped
+    entirely - not scanned, and its tag's existing membership is left exactly as it is rather
+    than being torn down."""
+    enabled = enabled_categories(stash)
     tag_ids = ensure_tags(stash)
-    found = scan(stash)
+    found = scan(stash, enabled=enabled)
 
     category_scene_ids = {
         "missingCover": {e["id"] for e in found["missingCover"]},
@@ -238,7 +288,11 @@ def scan_and_tag(stash):
         "noFingerprint": {e["id"] for e in found["noFingerprint"]},
     }
 
-    for key, name, _ in CHILD_TAGS:
+    for key, name, _, _ in CHILD_TAGS:
+        if key not in enabled:
+            log.info(f"'{name}': tracking disabled - skipped (existing tags left as-is).")
+            continue
+
         tag_id = tag_ids[key]
         should_have = category_scene_ids[key]
         currently_tagged = stash.find_scene_ids_with_tag(tag_id)
@@ -261,7 +315,7 @@ def scan_and_tag(stash):
 def remove_tags(stash):
     """Removes every tag this plugin created (untagging every scene first), and the parent
     tag too - leaves anything else in the library completely alone."""
-    for key, name, _ in CHILD_TAGS:
+    for key, name, _, _ in CHILD_TAGS:
         tag = stash.find_tag(name)
         if tag is None:
             log.info(f"Tag '{name}' doesn't exist - nothing to remove.")

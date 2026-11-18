@@ -35,6 +35,21 @@ custom page - just tags.
   scene first), including the parent. Leaves everything else in your
   library untouched.
 
+## Disabling individual types (Settings → Plugins → Missing Assets)
+
+Every type above is tracked by default. Each one has its own **Disable
+<type>** checkbox (e.g. "Disable Missing Sprite") - check it to stop
+**Scan and Tag** scanning for and tagging that one type entirely. A
+disabled type's existing tag and whatever it's already applied to are left
+exactly as they are - disabling only pauses further scanning/syncing for
+it, it doesn't untag or delete anything. Re-enable it (uncheck the box) and
+the next **Scan and Tag** picks it back up, bringing it back in sync.
+
+These checkboxes show unchecked by default even though every type starts
+out enabled - that's Stash's own Settings UI (an unset checkbox always
+renders unchecked), not this plugin disabling anything on its own; nothing
+is actually off until you explicitly check one.
+
 ## How it works
 
 - **Cover and phash are checked against the database itself**, via Stash's
@@ -77,7 +92,8 @@ custom page - just tags.
   plugins, and runs on the Stash server itself (the only place that can
   read its own generated-content folder directly).
 - **`stash_interface.py`** - the small GraphQL client the task uses
-  (configuration, tag CRUD, scene paging, bulk tag updates).
+  (configuration, this plugin's own settings, tag CRUD, scene paging, bulk
+  tag updates).
 
 No UI/JavaScript at all - everything here is a plain Python task, the same
 shape as List Error Files.

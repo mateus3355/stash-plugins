@@ -58,6 +58,20 @@ query MissingAssetsConfiguration {
         data = self._gql(query)
         return data["configuration"]["general"]
 
+    def get_plugin_settings(self, plugin_id):
+        """This plugin's own saved settings (Settings -> Plugins -> Missing Assets) - a
+        plain {settingKey: value} map, {} if nothing's been saved yet. Not something
+        runPluginTask passes in on its own (only a task's own defaultArgs are), so the
+        plugin has to fetch its settings back for itself."""
+        query = """
+query MissingAssetsPluginSettings($ids: [ID!]) {
+  configuration {
+    plugins(include: $ids)
+  }
+}"""
+        data = self._gql(query, {"ids": [plugin_id]})
+        return data["configuration"]["plugins"].get(plugin_id) or {}
+
     # ------------------------------------------------------------------
     # Tags
     # ------------------------------------------------------------------

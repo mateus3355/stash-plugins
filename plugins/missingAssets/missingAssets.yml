@@ -11,6 +11,41 @@ exec:
   - "{pluginDir}/missingAssets.py"
 interface: raw
 
+settings:
+  disableCover:
+    displayName: Disable Missing Cover
+    description: >-
+      All types are tracked by default - check this to stop scanning for,
+      and tagging, scenes with no cover image.
+    type: BOOLEAN
+  disablePhash:
+    displayName: Disable Missing Phash
+    description: Check to stop scanning for, and tagging, scenes with no perceptual hash fingerprint.
+    type: BOOLEAN
+  disableSprite:
+    displayName: Disable Missing Sprite
+    description: Check to stop scanning for, and tagging, scenes missing their scrubber sprite.
+    type: BOOLEAN
+  disablePreview:
+    displayName: Disable Missing Scene Preview
+    description: Check to stop scanning for, and tagging, scenes missing their own hover-preview video.
+    type: BOOLEAN
+  disableMarkerPreview:
+    displayName: Disable Missing Marker Preview
+    description: Check to stop scanning for, and tagging, scenes with a marker missing its own preview.
+    type: BOOLEAN
+  disableNoMarkers:
+    displayName: Disable No Markers
+    description: Check to stop scanning for, and tagging, scenes with no scene markers at all.
+    type: BOOLEAN
+  disableNoFingerprint:
+    displayName: Disable No Fingerprint
+    description: >-
+      Check to stop scanning for, and tagging, scenes with no fingerprint
+      of the active naming algorithm (sprite/preview/marker-preview can't
+      be checked for these at all).
+    type: BOOLEAN
+
 tasks:
   - name: Scan and Tag
     description: >
