@@ -13,6 +13,21 @@
 #   * Up to five attempts per file: GPU decode+encode -> CPU decode+GPU encode
 #     -> CPU -> stream copy -> CPU without audio (see ATTEMPTS below).
 #   * Shows progress (percent, speed, ETA) and an overall counter.
+#   * Verify step copies Stash exactly: 25 phash frames (5%..95%) plus the
+#     20% screenshot, and checks real image bytes come out. ffmpeg can exit 0
+#     yet output nothing; Stash then logs "decoding image: unknown format".
+#   * The original stays at its path until the new file passes. Encoding goes
+#     to a hidden temp file, then is swapped in. The original never vanishes
+#     mid-run, which caused "No such file or directory" in Stash.
+#   * KEEP_NAME=1 (default): non-mp4/mov/mkv files (avi, wmv, flv, ...) keep
+#     their name and get Matroska content, so Stash's path stays valid and the
+#     scene keeps its metadata. KEEP_NAME=0 renames them to .mp4 instead.
+#   * Extra "retime" attempt rebuilds broken timestamps. These make the file
+#     report a fake duration (e.g. 15h), so Stash seeks into empty gaps.
+#
+# AFTER RUNNING: rescan the affected folders in Stash BEFORE generating.
+# Until then Stash keeps the OLD duration and fingerprint, and seeks to
+# times that don't exist in the new file (another source of "unknown format").
 #
 # Usage:  bash reencode_v2.sh [list_file] [log_file]
 #         defaults: files.txt  reencode_v2.log
@@ -33,7 +48,9 @@ NV_EXTRA=(-spatial_aq 1 -aq-strength 8)
 #   cpu        = CPU decode + libx264
 #   copy       = no re-encode, just rewrite the container (instant, lossless)
 #   cpu-noaudio= libx264, audio dropped               (last resort)
-ATTEMPTS="${ATTEMPTS:-gpu gpu-swdec cpu copy cpu-noaudio}"
+#   retime     = libx264 + timestamps rebuilt from frame count (fixes fake/huge durations)
+ATTEMPTS="${ATTEMPTS:-gpu gpu-swdec cpu copy retime cpu-noaudio}"
+KEEP_NAME="${KEEP_NAME:-1}"
 ERR_LINES=15   # how many ffmpeg error lines to keep in the log per attempt
 
 [ -f "$LIST" ] || { echo "List file not found: $LIST" >&2; exit 1; }
@@ -42,7 +59,10 @@ command -v "$FFPROBE" >/dev/null || { echo "ffprobe not found: $FFPROBE" >&2; ex
 
 TTY=0; [ -t 1 ] && TTY=1
 ERRTMP=$(mktemp)
-trap 'rm -f "$ERRTMP"' EXIT
+IMGTMP=$(mktemp)
+TMPOUT=""
+trap 'rm -f "$ERRTMP" "$IMGTMP"; [ -n "$TMPOUT" ] && rm -f -- "$TMPOUT"' EXIT
+trap 'exit 130' INT TERM
 
 log() {
   [ $TTY -eq 1 ] && printf '\r\033[K'
@@ -130,35 +150,56 @@ run_ff() {
 }
 
 # ---------- check the output the way Stash uses it ----------
+# grab one frame like Stash does: ffmpeg must exit 0 AND produce a real image.
+# usage: grab_frame <file> <seconds> bmp|jpg
+grab_frame() {
+  local f=$1 ss=$2 kind=$3 magic
+  : > "$IMGTMP"
+  if [ "$kind" = bmp ]; then   # phash / sprite frame
+    "$FFMPEG" -nostdin -v error -y -ss "$ss" -i "$(safe_path "$f")" -frames:v 1 \
+        -vf "scale=160:-2" -c:v bmp -f rawvideo - >"$IMGTMP" 2>>"$ERRTMP" || return 1
+    magic=$(head -c 2 "$IMGTMP" | od -An -tx1 | tr -d ' \n'); [ "$magic" = "424d" ]   # "BM"
+  else                         # cover screenshot
+    "$FFMPEG" -nostdin -v error -y -ss "$ss" -i "$(safe_path "$f")" -frames:v 1 \
+        -q:v 2 -f image2 -c:v mjpeg - >"$IMGTMP" 2>>"$ERRTMP" || return 1
+    magic=$(head -c 2 "$IMGTMP" | od -An -tx1 | tr -d ' \n'); [ "$magic" = "ffd8" ]   # JPEG SOI
+  fi
+}
+
 verify() {
-  local out=$1 ss=0 odur
+  local out=$1 odur t i
   [ -s "$out" ] || return 1
+  # Stash stores format duration rounded to 2 decimals and seeks based on it
   odur=$("$FFPROBE" -v error -show_entries format=duration -of csv=p=0 -i "$(safe_path "$out")" 2>/dev/null)
-  [[ "$odur" =~ ^[0-9.]+$ ]] || return 1
-  ss=$(awk -v d="$odur" 'BEGIN{printf "%.2f", d*0.2}')
+  [[ "$odur" =~ ^[0-9.]+$ ]] || { echo "verify: no duration" >> "$ERRTMP"; return 1; }
   : > "$ERRTMP"
-  # screenshot test (mjpeg) - the exact kind of command that failed in Stash
-  "$FFMPEG" -nostdin -v error -y -ss "$ss" -i "$(safe_path "$out")" -frames:v 1 \
-      -vf "scale=320:-2" -c:v mjpeg -f image2 /dev/null 2>"$ERRTMP" || return 1
-  # sprite test (bmp)
-  "$FFMPEG" -nostdin -v error -y -ss "$ss" -i "$(safe_path "$out")" -frames:v 1 \
-      -vf "scale=160:-2" -c:v bmp -f rawvideo /dev/null 2>>"$ERRTMP" || return 1
+  # cover screenshot at 20%
+  t=$(awk -v d="$odur" 'BEGIN{printf "%.3f", d*0.2}')
+  grab_frame "$out" "$t" jpg || { echo "verify: no screenshot at ${t}s of ${odur}s" >> "$ERRTMP"; return 1; }
+  # phash sprite: 25 frames, offset 5%, step 90%/25 (pkg/hash/videophash/phash.go)
+  for i in $(seq 0 24); do
+    t=$(awk -v d="$odur" -v i="$i" 'BEGIN{printf "%.3f", 0.05*d + i*(0.9*d/25)}')
+    grab_frame "$out" "$t" bmp || { echo "verify: no phash frame at ${t}s of ${odur}s" >> "$ERRTMP"; return 1; }
+  done
   # warn (not fail) if much shorter than the source - source may have been truncated
+  # or the source reported a fake duration
   if awk -v a="$odur" -v b="$DUR" 'BEGIN{exit !(b>0 && a < b*0.9)}'; then
-    log "WARN  output is shorter than source (${odur%.*}s vs ${DUR%.*}s): $out"
+    log "$PREFIX WARN  output is shorter than source (${odur%.*}s vs ${DUR%.*}s), source was truncated or reported a fake duration: $f"
   fi
   return 0
 }
 
 # ---------- one encode attempt ----------
-# usage: encode <input> <output> gpu|cpu|cpu-noaudio
+# usage: encode <input> <output> <mode>   (muxer comes from $OUTFMT)
 encode() {
   local in out mode
   in="$(safe_path "$1")"; out="$(safe_path "$2")"; mode=$3
-  local -a v a hw=() extra=()
+  local -a v a hw=() extra=(-f "$OUTFMT")
   local vf="setparams=color_primaries=$CPRIM:color_trc=$CTRC:colorspace=$CMAT,scale=trunc(iw/2)*2:trunc(ih/2)*2:out_range=tv,format=yuv420p"
 
-  case "${out,,}" in *.mp4|*.m4v|*.mov) extra=(-movflags +faststart) ;; esac
+  case "$OUTFMT" in mp4|mov) extra+=(-movflags +faststart) ;; esac
+  # retime: throw away the broken timestamps, rebuild them from the frame count
+  [ "$mode" = "retime" ] && vf="setpts=N/FRAME_RATE/TB,$vf"
 
   # copy: no re-encode, just a clean new container (like: ffmpeg -i in -c copy -shortest out)
   if [ "$mode" = "copy" ]; then
@@ -176,13 +217,13 @@ encode() {
   esac
   case "$mode" in
     cpu-noaudio) a=(-an) ;;
-    cpu)         a=(-map '0:a:0?' -c:a aac -b:a 192k -ac 2 -af "aresample=async=1:first_pts=0") ;;
+    cpu|retime)  a=(-map '0:a:0?' -c:a aac -b:a 192k -ac 2 -af "aresample=async=1000:first_pts=0") ;;
     *)           a=(-map '0:a:0?' -c:a aac -b:a 192k -af "aresample=async=1:first_pts=0") ;;
   esac
 
   run_ff "$mode" "${hw[@]}" \
     -fflags +genpts+discardcorrupt -err_detect ignore_err -i "$in" \
-    -map 0:v:0 "${a[@]}" -vf "$vf" "${v[@]}" \
+    -map 0:v:0 "${a[@]}" -vf "$vf" "${v[@]}" -map_metadata -1 -map_chapters -1 \
     -color_primaries "$CPRIM" -color_trc "$CTRC" -colorspace "$CMAT" -color_range tv \
     -max_muxing_queue_size 9999 -avoid_negative_ts make_zero "${extra[@]}" \
     "$out"
@@ -201,25 +242,25 @@ for f in "${FILES[@]}"; do
   bak="$f.bak"
   base="${f%.*}"
 
-  # keep the same name when the container can hold H.264/AAC
+  # output name + muxer. Keeping the name keeps Stash's path (and scene metadata) valid.
   case "${f,,}" in
-    *.mp4|*.m4v|*.mov|*.mkv) out="$f" ;;
-    *)                       out="$base.mp4" ;;
+    *.mp4|*.m4v) out="$f"; OUTFMT=mp4 ;;
+    *.mov)       out="$f"; OUTFMT=mov ;;
+    *.mkv)       out="$f"; OUTFMT=matroska ;;
+    *) if [ "$KEEP_NAME" = 1 ]; then out="$f"; OUTFMT=matroska
+       else out="$base.mp4"; OUTFMT=mp4; fi ;;
   esac
   v1out="$base.mp4"     # where v1 put its output
 
-  # where is the original?
+  # where is the original?  (an existing .bak is the true original from an earlier run)
   if [ -f "$bak" ]; then
-    src="$bak"                       # already backed up (by v1 or an earlier v2 run)
+    src="$bak"
     if [ -f "$out" ] && probe "$src" && verify "$out"; then
       log "$PREFIX SKIP  (already OK)        $out"
       skipped=$((skipped + 1)); continue
     fi
   elif [ -f "$f" ]; then
-    if ! mv -- "$f" "$bak"; then
-      log "$PREFIX FAIL  (rename failed)     $f"; failed=$((failed + 1)); continue
-    fi
-    src="$bak"
+    src="$f"                         # stays in place until the new file passes
   else
     log "$PREFIX SKIP  (not found)         $f"
     skipped=$((skipped + 1)); continue
@@ -229,15 +270,17 @@ for f in "${FILES[@]}"; do
 
   if ! probe "$src"; then
     log "$PREFIX FAIL  (no video stream / unreadable) $f"
-    [ -e "$f" ] || mv -- "$src" "$f"
     failed=$((failed + 1)); continue
   fi
+
+  dir="$(dirname -- "$f")"
+  TMPOUT="$dir/.v2out_$$_$n.tmp"
 
   # Stage 1: for h264/hevc, rewrite colour values in the bitstream (no re-encode)
   input="$src"
   tmp=""
   case "$CODEC" in h264|hevc)
-    tmp="$(dirname -- "$f")/.v2tmp_$$_$n.mkv"
+    tmp="$dir/.v2tmp_$$_$n.mkv"
     bsf="${CODEC}_metadata=colour_primaries=$(prim_num "$CPRIM"):transfer_characteristics=$(trc_num "$CTRC"):matrix_coefficients=$(mat_num "$CMAT")"
     if run_ff "fix-color" -fflags +genpts+discardcorrupt -err_detect ignore_err -i "$(safe_path "$src")" \
          -map 0:v:0 -map '0:a:0?' -c copy -bsf:v "$bsf" "$tmp" && [ -s "$tmp" ]; then
@@ -250,10 +293,12 @@ for f in "${FILES[@]}"; do
 
   done_mode=""
   for mode in $ATTEMPTS; do
-    rm -f -- "$out"
-    if encode "$input" "$out" "$mode"; then
-      if verify "$out"; then done_mode=$mode; break; fi
-      log "$PREFIX WARN  $mode: encoded but screenshot test failed"
+    rm -f -- "$TMPOUT"
+    # retime must read the untouched original (the colour pre-fix keeps the bad timestamps)
+    m_in="$input"; [ "$mode" = "retime" ] && m_in="$src"
+    if encode "$m_in" "$TMPOUT" "$mode"; then
+      if verify "$TMPOUT"; then done_mode=$mode; break; fi
+      log "$PREFIX WARN  $mode: encoded but Stash screenshot/phash test failed"
     else
       log "$PREFIX WARN  $mode: ffmpeg failed"
     fi
@@ -262,20 +307,37 @@ for f in "${FILES[@]}"; do
   [ -n "$tmp" ] && rm -f -- "$tmp"
 
   if [ -n "$done_mode" ]; then
+    # swap in: original -> .bak (only once), new file -> final name
+    if [ "$src" = "$f" ] && ! mv -- "$f" "$bak"; then
+      log "$PREFIX FAIL  (could not back up original) $f"
+      rm -f -- "$TMPOUT"; TMPOUT=""; failed=$((failed + 1)); continue
+    fi
+    if ! mv -f -- "$TMPOUT" "$out"; then
+      log "$PREFIX FAIL  (could not move new file into place) $out"
+      [ -e "$f" ] || mv -- "$bak" "$f"
+      rm -f -- "$TMPOUT"; TMPOUT=""; failed=$((failed + 1)); continue
+    fi
+    TMPOUT=""
     ok=$((ok + 1))
     log "$PREFIX OK    ($done_mode)  $out"
     [ "$done_mode" = "cpu-noaudio" ] && log "$PREFIX WARN  audio was dropped: $out"
+    [ "$out" != "$f" ] && log "$PREFIX INFO  renamed: Stash path changed $f -> $out"
     # remove the old v1 .mp4 if v2 wrote to a different name
     if [ "$v1out" != "$out" ] && [ "$v1out" != "$f" ] && [ -f "$v1out" ]; then
       rm -f -- "$v1out" && log "$PREFIX INFO  removed old v1 output $v1out"
     fi
   else
     failed=$((failed + 1))
-    rm -f -- "$out"
-    mv -- "$src" "$f"
-    log "$PREFIX FAIL  (original restored)  $f"
+    rm -f -- "$TMPOUT"; TMPOUT=""
+    # an earlier run may have left a bad output; put the true original back
+    if [ "$src" = "$bak" ]; then
+      [ "$out" != "$f" ] && rm -f -- "$out"
+      mv -f -- "$bak" "$f"
+    fi
+    log "$PREFIX FAIL  (original kept)  $f"
   fi
 done
 
 el=$(( $(date +%s) - START ))
 log "===== DONE in $((el/3600))h$(((el%3600)/60))m: $TOTAL total | $ok OK | $failed failed | $skipped skipped ====="
+[ "$ok" -gt 0 ] && log "NEXT: rescan these folders in Stash, THEN run generate (Stash still has the old durations)"

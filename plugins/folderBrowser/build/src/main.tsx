@@ -110,7 +110,7 @@ function findScenePath(id: string): Promise<string | undefined> {
 
 function findImagePath(id: string): Promise<string | undefined> {
   return gql(
-    "query FolderBrowserFindImagePath($id: ID!) { findImage(id: $id) { id visual_files { path } } }",
+    "query FolderBrowserFindImagePath($id: ID!) { findImage(id: $id) { id visual_files { ... on BaseFile { path } } } }",
     { id }
   ).then((data) => data?.findImage?.visual_files?.[0]?.path);
 }
