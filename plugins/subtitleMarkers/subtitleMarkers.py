@@ -232,11 +232,40 @@ def make_text_matcher(search_text, whole_word):
     return lambda text: search_lower in text.lower()
 
 
+def resolve_roots(path):
+    """path is one folder or a list of them (all libraries). Returns the existing folders,
+    with any folder nested inside another one dropped (it's walked as part of its parent
+    anyway - so a library inside another library isn't searched, and reported, twice).
+    Missing folders are skipped with a warning when several were given; an empty result
+    means nothing usable was given at all."""
+    paths = [path] if isinstance(path, str) else list(path or [])
+    roots = []
+    for p in paths:
+        if not p or not os.path.isdir(p):
+            if len(paths) > 1:
+                log.warning(f"Skipping library path that is not an existing directory: {p!r}")
+            continue
+        roots.append(os.path.normpath(p))
+    roots = sorted(set(roots))
+    return [r for r in roots if not any(r != o and r.startswith(o.rstrip(os.sep) + os.sep) for o in roots)]
+
+
+def find_srt_files_in(roots):
+    """find_srt_files over every root, in order (each root applies its own .stashignores)."""
+    for root in roots:
+        yield from find_srt_files(root)
+
+
+def _describe_roots(roots):
+    return roots[0] if len(roots) == 1 else f"{len(roots)} libraries ({', '.join(roots)})"
+
+
 def run(path, search, tag_id, title, stash, whole_word=False):
     """Searches, and creates a scene marker for every match (see module docstring-style
     comments on the dedup/tag/title behaviour throughout). Returns {"error": "..."} for
     invalid input, otherwise a dict of result counts."""
-    if not path or not os.path.isdir(path):
+    roots = resolve_roots(path)
+    if not roots:
         log.error(f"Path does not exist or is not a directory: {path!r}")
         return {"error": "invalid path"}
     if not search:
@@ -249,8 +278,8 @@ def run(path, search, tag_id, title, stash, whole_word=False):
     matcher = make_text_matcher(search, whole_word)
     marker_title = title or search
 
-    srt_files = list(find_srt_files(path))
-    log.info(f"Found {len(srt_files)} .srt file(s) under {path}")
+    srt_files = list(find_srt_files_in(roots))
+    log.info(f"Found {len(srt_files)} .srt file(s) under {_describe_roots(roots)}")
 
     scene_cache = {}  # path prefix -> scene dict or None
     markers_by_scene = {}  # scene id -> list of seconds (existing + created this run)
@@ -343,7 +372,8 @@ def search(path, search, stash, whole_word=False):
     the same reasoning as run()'s marker dedup: one spoken line split across cues shouldn't
     become several near-identical results. Returns {"error": "..."} for invalid input,
     otherwise a dict with a "results" list."""
-    if not path or not os.path.isdir(path):
+    roots = resolve_roots(path)
+    if not roots:
         log.error(f"Path does not exist or is not a directory: {path!r}")
         return {"error": "invalid path"}
     if not search:
@@ -352,8 +382,8 @@ def search(path, search, stash, whole_word=False):
 
     matcher = make_text_matcher(search, whole_word)
 
-    srt_files = list(find_srt_files(path))
-    log.info(f"Found {len(srt_files)} .srt file(s) under {path}")
+    srt_files = list(find_srt_files_in(roots))
+    log.info(f"Found {len(srt_files)} .srt file(s) under {_describe_roots(roots)}")
 
     scene_cache = {}  # path prefix -> scene dict or None
     recent_by_scene = {}  # scene id -> list of seconds already in results, for dedup
@@ -438,6 +468,16 @@ def main():
     search_text = args.get("search", "")
     mode = args.get("mode", "mark")
     whole_word = _truthy_arg(args.get("wholeWord", False))
+
+    # "Search all libraries": every library path Stash is configured with (video ones -
+    # subtitles only ever belong to scenes), read from the server itself rather than
+    # trusted from the UI, so it always matches the current configuration.
+    if _truthy_arg(args.get("allLibraries", False)):
+        path = stash.library_paths()
+        if not path:
+            log.error("No video library paths are configured in Stash.")
+            print(json.dumps({"error": "no libraries configured"}))
+            return
 
     if mode == "search":
         result = search(path, search_text, stash, whole_word=whole_word)

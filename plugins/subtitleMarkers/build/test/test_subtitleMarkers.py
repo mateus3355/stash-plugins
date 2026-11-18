@@ -592,6 +592,57 @@ class SearchTests(unittest.TestCase):
         self.assertEqual(len(result["results"]), 1)
 
 
+class AllLibrariesTests(unittest.TestCase):
+    """Searching several roots at once (the "Search all libraries" option)."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmpdir.cleanup)
+        self.lib1 = os.path.join(self.tmpdir.name, "lib1")
+        self.lib2 = os.path.join(self.tmpdir.name, "lib2")
+        for rel, t in (("lib1/a.srt", "00:00:01,000"), ("lib2/b.srt", "00:00:05,000"), ("lib1/nested/c.srt", "00:00:09,000")):
+            full = os.path.join(self.tmpdir.name, rel)
+            os.makedirs(os.path.dirname(full), exist_ok=True)
+            with open(full, "w", encoding="utf-8") as f:
+                f.write(f"1\n{t} --> 00:00:59,000\nhello\n")
+        self.stash = FakeStash({
+            os.path.join(self.lib1, "a.mp4"): "scene-a",
+            os.path.join(self.lib2, "b.mp4"): "scene-b",
+            os.path.join(self.lib1, "nested", "c.mp4"): "scene-c",
+        })
+        self.stash.library_paths = lambda: [self.lib1, self.lib2]
+
+    def test_search_covers_every_root(self):
+        result = search([self.lib1, self.lib2], "hello", self.stash)
+        self.assertEqual(sorted(r["sceneId"] for r in result["results"]), ["scene-a", "scene-b", "scene-c"])
+
+    def test_a_library_nested_in_another_is_not_searched_twice(self):
+        result = search([self.lib1, os.path.join(self.lib1, "nested")], "hello", self.stash)
+        self.assertEqual(sorted(r["sceneId"] for r in result["results"]), ["scene-a", "scene-c"])
+
+    def test_a_missing_library_is_skipped_not_fatal(self):
+        result = search(["/no/such/lib", self.lib2], "hello", self.stash)
+        self.assertEqual([r["sceneId"] for r in result["results"]], ["scene-b"])
+
+    def test_all_missing_is_still_invalid_path(self):
+        self.assertEqual(search(["/no/a", "/no/b"], "hello", self.stash), {"error": "invalid path"})
+
+    def test_run_creates_markers_across_every_root(self):
+        result = run([self.lib1, self.lib2], "hello", "tag-1", "t", self.stash)
+        self.assertEqual(result["created"], 3)
+
+    def test_main_all_libraries_uses_the_servers_library_list_not_path(self):
+        printed = MainOutputEnvelopeTests.run_main(
+            None, {"mode": "search", "allLibraries": "true", "path": "/ignored", "search": "hello"}, self.stash
+        )
+        self.assertEqual(sorted(r["sceneId"] for r in printed["output"]["results"]), ["scene-a", "scene-b", "scene-c"])
+
+    def test_main_all_libraries_with_none_configured_errors(self):
+        self.stash.library_paths = lambda: []
+        printed = MainOutputEnvelopeTests.run_main(None, {"mode": "search", "allLibraries": "true", "search": "hello"}, self.stash)
+        self.assertEqual(printed, {"error": "no libraries configured"})
+
+
 class MainOutputEnvelopeTests(unittest.TestCase):
     """main()'s stdout must match Stash's plugin JSON-RPC protocol (pkg/plugin/common/msg.go
     PluginOutput): {"output": <whatever the mode's function returned>} on success, or

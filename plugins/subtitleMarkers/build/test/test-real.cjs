@@ -355,7 +355,7 @@ async function run() {
   }
   console.log('D) page rendered without crashing');
 
-  const pathInput = container.querySelector('.subtitle-markers-folder input');
+  const pathInput = container.querySelector('.subtitle-markers-folder input:not([type="checkbox"])');
   const searchInput = Array.from(container.querySelectorAll('input[type="text"]')).find((i) => i.placeholder.includes('subtitle lines'));
   console.log('E) path (real FolderSelect)/search inputs present:', !!pathInput && !!searchInput);
   console.log('F2) real FolderSelect shows the library path as a starting point:', container.textContent.includes('/lib'));
@@ -423,6 +423,27 @@ async function run() {
     await new Promise((r) => setTimeout(r, 20));
   });
   console.log('Q) no marker-creation calls were made in search-only mode:', !graphqlCalls.some((c) => c.name === 'SubtitleMarkersRunTask'));
+
+  // "Search all libraries": hides the folder picker and sends allLibraries instead of a path
+  // (the plugin resolves the actual library list from Stash's config itself) - then turned
+  // back off, so the rest of this test continues from the picked-folder state.
+  const allLibrariesCheckbox = container.querySelector('#subtitle-markers-all-libraries');
+  console.log('Q1) "Search all libraries" checkbox is present and unchecked by default:', !!allLibrariesCheckbox && allLibrariesCheckbox.checked === false);
+  await TestUtils.act(async () => {
+    TestUtils.Simulate.change(allLibrariesCheckbox, { target: { checked: true } });
+  });
+  console.log('Q2) checking it replaces the folder picker with the library list:', !container.querySelector('.folder-list-item') && !!container.querySelector('.subtitle-markers-all-libraries-list') && container.querySelector('.subtitle-markers-all-libraries-list').textContent.includes('/lib'));
+  await TestUtils.act(async () => {
+    TestUtils.Simulate.click(runButton);
+    await new Promise((r) => setTimeout(r, 20));
+  });
+  const allLibrariesCall = graphqlCalls.filter((c) => c.name === 'SubtitleMarkersSearch').pop();
+  console.log('Q3) searching sends allLibraries: "true" and no path:', !!allLibrariesCall && allLibrariesCall.variables.args.allLibraries === 'true' && !('path' in allLibrariesCall.variables.args));
+  await TestUtils.act(async () => {
+    TestUtils.Simulate.change(container.querySelector('#subtitle-markers-all-libraries'), { target: { checked: false } });
+    await new Promise((r) => setTimeout(r, 20));
+  });
+  console.log('Q4) unchecking it brings the folder picker back with the folder still picked:', !!container.querySelector('.subtitle-markers-folder input:not([type="checkbox"])') && container.querySelector('.subtitle-markers-folder input:not([type="checkbox"])').value === '/lib/A');
 
   // The real SceneCard needs its own scene data (tags, preview, etc.) - a separate fetch,
   // after the search itself, so wait for that too before checking what's actually rendered.

@@ -125,6 +125,8 @@ const STATUS_LABEL: Record<JobStatus, string> = {
 
 function SubtitleMarkersPage({ libraryPaths }: { libraryPaths: string[] }) {
   const [path, setPath] = useState("");
+  // Search every configured library (resolved server-side) instead of one picked folder.
+  const [allLibraries, setAllLibraries] = useState(false);
   const [search, setSearch] = useState("");
   const [wholeWord, setWholeWord] = useState(false);
   const [createMarkers, setCreateMarkers] = useState(false);
@@ -146,7 +148,8 @@ function SubtitleMarkersPage({ libraryPaths }: { libraryPaths: string[] }) {
 
   const jobRunning = starting || (job !== null && RUNNING_STATUSES.includes(job.status));
   const busy = jobRunning || searching;
-  const canRun = !!path.trim() && !!search.trim() && (!createMarkers || !!tagId) && !busy;
+  const hasLocation = allLibraries ? libraryPaths.length > 0 : !!path.trim();
+  const canRun = hasLocation && !!search.trim() && (!createMarkers || !!tagId) && !busy;
 
   // Poll the job until it stops running. A fresh effect per jobId, so starting a new run
   // (a new jobId) cleanly replaces whatever polling the previous one was doing.
@@ -177,12 +180,18 @@ function SubtitleMarkersPage({ libraryPaths }: { libraryPaths: string[] }) {
     };
   }, [jobId]);
 
+  // Either the picked folder, or "every library" - the plugin looks those up from Stash's own
+  // configuration itself, so this stays correct even if the libraries change after load.
+  function locationArgs(): Record<string, string> {
+    return allLibraries ? { allLibraries: "true" } : { path: path.trim() };
+  }
+
   function handleRun() {
     const searchTrimmed = search.trim();
     setStarting(true);
     setJob(null);
     runPluginTask(
-      { path: path.trim(), search: searchTrimmed, wholeWord: String(wholeWord), tagId, title: title.trim() },
+      { ...locationArgs(), search: searchTrimmed, wholeWord: String(wholeWord), tagId, title: title.trim() },
       `Searching subtitles for "${searchTrimmed}"`
     )
       .then((newJobId: string) => {
@@ -201,7 +210,7 @@ function SubtitleMarkersPage({ libraryPaths }: { libraryPaths: string[] }) {
     setResults(null);
     setSceneMap(null);
     setSceneMapError(null);
-    runPluginOperation({ mode: "search", path: path.trim(), search: search.trim(), wholeWord: String(wholeWord) })
+    runPluginOperation({ mode: "search", ...locationArgs(), search: search.trim(), wholeWord: String(wholeWord) })
       .then((output: { results: SearchResult[] }) => {
         setSearching(false);
         setResults(output.results);
@@ -366,7 +375,7 @@ function SubtitleMarkersPage({ libraryPaths }: { libraryPaths: string[] }) {
     <div className="subtitle-markers-page container-fluid">
       <h3>Subtitle Markers</h3>
       <p className="text-muted">
-        Searches every .srt file under a folder (and its subfolders) for a phrase - matched to
+        Searches every .srt file under a folder (or every library) and its subfolders for a phrase - matched to
         the video file next to each subtitle, the same way Stash itself associates captions.
         Either jump straight to each match's timestamp, or (optionally) create a scene marker for
         each one, with preview generation queued automatically afterwards.
@@ -374,12 +383,31 @@ function SubtitleMarkersPage({ libraryPaths }: { libraryPaths: string[] }) {
 
       <Form.Group className="subtitle-markers-folder">
         <Form.Label>Folder</Form.Label>
-        <FolderSelect
-          currentDirectory={path}
-          onChangeDirectory={setPath}
-          defaultDirectories={libraryPaths}
+        <Form.Check
+          type="checkbox"
+          id="subtitle-markers-all-libraries"
+          className="mb-2"
+          label="Search all libraries"
+          checked={allLibraries}
+          onChange={(e: any) => setAllLibraries(e.target.checked)}
+          disabled={busy}
         />
-        <Form.Text className="text-muted">Searched recursively, including subfolders.</Form.Text>
+        {allLibraries ? (
+          <Form.Text className="text-muted subtitle-markers-all-libraries-list">
+            {libraryPaths.length > 0
+              ? `Searching every library, recursively: ${libraryPaths.join(", ")}`
+              : "No libraries are configured in Stash."}
+          </Form.Text>
+        ) : (
+          <>
+            <FolderSelect
+              currentDirectory={path}
+              onChangeDirectory={setPath}
+              defaultDirectories={libraryPaths}
+            />
+            <Form.Text className="text-muted">Searched recursively, including subfolders.</Form.Text>
+          </>
+        )}
       </Form.Group>
 
       <Form.Group>
@@ -465,7 +493,11 @@ function SubtitleMarkersPage({ libraryPaths }: { libraryPaths: string[] }) {
 function SubtitleMarkersPageWithConfig() {
   const { data } = GQL.useConfigurationQuery();
   if (!data?.configuration) return <Spinner animation="border" className="mt-3" />;
-  const libraryPaths = data.configuration.general.stashes.map((s: { path: string }) => s.path);
+  // Video libraries only - subtitles can only ever belong to scenes (matches what the
+  // plugin itself searches for "all libraries").
+  const libraryPaths = data.configuration.general.stashes
+    .filter((s: { excludeVideo: boolean }) => !s.excludeVideo)
+    .map((s: { path: string }) => s.path);
   return (
     <ToastProvider>
       <ConfigurationProvider configuration={data.configuration}>

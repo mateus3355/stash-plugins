@@ -23,6 +23,12 @@ without watching the whole thing or editing scenes by hand one at a time.
 - **Folder picking is Stash's own real `FolderSelect` component** (the same
   one used in the Scan/Clean task dialogs) - type a path or click your way
   down through subfolders, starting from your configured library paths.
+- **Search all libraries**: tick it to skip folder picking and search every
+  library at once. The plugin reads the library list from Stash's own
+  settings when it runs, so it always matches your current setup. Libraries
+  marked "exclude video" are skipped, since no subtitle in them can belong to
+  a scene. A library inside another one is only searched once, and a library
+  folder that no longer exists is skipped with a warning.
 - **Search-only by default, marker creation is opt-in**: with "Also create
   scene markers" off, nothing is written to your library - results are shown
   as soon as the search finishes (no background job or tag/title needed),

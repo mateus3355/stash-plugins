@@ -39,6 +39,17 @@ class StashInterface:
         return result.get("data", {})
 
     # ------------------------------------------------------------------
+    # Configuration
+    # ------------------------------------------------------------------
+
+    def library_paths(self):
+        """Every configured library path that holds videos (excludeVideo libraries are
+        skipped - they can't have scenes, so no subtitle in them could match one)."""
+        data = self._gql("query { configuration { general { stashes { path excludeVideo } } } }")
+        stashes = ((data.get("configuration") or {}).get("general") or {}).get("stashes") or []
+        return [st["path"] for st in stashes if st.get("path") and not st.get("excludeVideo")]
+
+    # ------------------------------------------------------------------
     # Scenes
     # ------------------------------------------------------------------
 
