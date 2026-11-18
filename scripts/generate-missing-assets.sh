@@ -20,6 +20,8 @@
 #
 # Requires curl and jq.
 
+# Example: ./script.sh files.txt --url https://stash.example.com --apikey <your-api-key>
+
 set -euo pipefail
 
 usage() {
@@ -117,16 +119,19 @@ resolve_path_to_scene_ids() {
   echo "$resp" | jq -r '.data.findScenes.scenes[].id'
 }
 
-# One scene per line - strip comments and leading/trailing whitespace only (a path can
-# contain internal spaces). A line that's all digits is already a scene id; anything else is
-# treated as a file path and resolved to its scene id above. A path that doesn't match
-# anything is warned about and skipped, not fatal for the rest of the list.
+# One scene per line - trim leading/trailing whitespace only (a path can contain internal
+# spaces, AND a literal "#", neither of which should be touched). A line is only treated as
+# a comment if it STARTS with "#" after trimming - never if "#" merely appears somewhere in
+# it, since that would corrupt (truncate) any real path containing one. A line that's all
+# digits is already a scene id; anything else is treated as a file path and resolved to its
+# scene id above. A path that doesn't match anything is warned about and skipped, not fatal
+# for the rest of the list.
 SCENE_IDS=()
 UNRESOLVED=0
 while IFS= read -r line || [ -n "$line" ]; do
-  line="${line%%#*}"
   line="$(printf '%s' "$line" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
   [ -z "$line" ] && continue
+  [[ "$line" == \#* ]] && continue
 
   if [[ "$line" =~ ^[0-9]+$ ]]; then
     SCENE_IDS+=("$line")
